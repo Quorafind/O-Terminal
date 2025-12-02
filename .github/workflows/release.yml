@@ -62,10 +62,17 @@ jobs:
                   node-version: ${{ matrix.node-version }}
                   cache: "pnpm"
 
-            - name: Install dependencies
+            # Windows: Install without running postinstall scripts to avoid premature node-pty build
+            - name: Install dependencies (Windows)
+              if: matrix.platform == 'win32'
+              run: pnpm install --frozen-lockfile --ignore-scripts
+
+            # Unix: Normal install
+            - name: Install dependencies (Unix)
+              if: matrix.platform != 'win32'
               run: pnpm install --frozen-lockfile
 
-            # Windows: First rebuild to download headers, then fix, then rebuild again
+            # Windows: Download headers, fix source files, then rebuild
             - name: Download Electron headers (Windows)
               if: matrix.platform == 'win32'
               run: npx @electron/rebuild -m node_modules/node-pty -v ${{ env.ELECTRON_VERSION }} --force
