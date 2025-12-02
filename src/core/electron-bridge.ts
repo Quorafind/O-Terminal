@@ -1,8 +1,11 @@
 /**
  * Electron Bridge Implementation
  *
- * Provides access to Electron/Node.js APIs and manages the PTY host sidecar process.
- * Uses ELECTRON_RUN_AS_NODE to bypass context-aware native module restrictions.
+ * Provides access to Electron/Node.js APIs and manages PTY processes.
+ *
+ * Loading Strategy (in priority order):
+ * 1. @electron/remote - Direct loading in main process (preferred)
+ * 2. PTY Host Sidecar - Separate Node.js process with IPC (fallback)
  *
  * @module electron-bridge
  */
@@ -41,19 +44,28 @@ interface PtyHostState {
 }
 
 /**
+ * PTY loading mode
+ */
+type PtyLoadMode = "remote" | "sidecar" | null;
+
+/**
  * Default timeout for RPC requests (ms)
  */
 const RPC_TIMEOUT = 30000;
 
 /**
- * Electron bridge implementation with PTY host sidecar support
+ * Electron bridge implementation with multiple PTY loading strategies
  */
 export class ElectronBridge extends BaseElectronBridge {
 	private _electronAvailable: boolean | null = null;
 	private _pluginDirectory: string | null = null;
 	private _vaultPath: string | null = null;
 
-	// PTY Host management
+	// PTY loading mode
+	private _ptyLoadMode: PtyLoadMode = null;
+	private _directNodePty: typeof import("node-pty") | null = null;
+
+	// PTY Host Sidecar management (fallback mode)
 	private hostState: PtyHostState | null = null;
 	private messageId = 0;
 	private pendingRequests = new Map<string, PendingRequest>();
@@ -184,7 +196,78 @@ export class ElectronBridge extends BaseElectronBridge {
 	}
 
 	// ============================================================
-	// PTY Host Sidecar Management
+	// Strategy 1: @electron/remote (Preferred)
+	// ============================================================
+
+	/**
+	 * Try to load node-pty using @electron/remote
+	 * This runs node-pty in the main process, avoiding sidecar overhead
+	 */
+	private async tryLoadViaElectronRemote(): Promise<
+		typeof import("node-pty") | null
+	> {
+		try {
+			console.log("🔍 Trying to load node-pty via @electron/remote...");
+
+			// Try to get @electron/remote module
+			let remote: any;
+			try {
+				remote = this.requireModule("@electron/remote");
+			} catch {
+				console.debug(
+					"@electron/remote not available directly, trying window.require",
+				);
+				try {
+					remote = (window as any).require("@electron/remote");
+				} catch {
+					console.debug("@electron/remote not available");
+					return null;
+				}
+			}
+
+			if (!remote || typeof remote.require !== "function") {
+				console.debug("@electron/remote.require is not available");
+				return null;
+			}
+
+			// Use remote.require to load node-pty in main process
+			const path = this.requireModule("path");
+			const pluginDir = this._pluginDirectory || process.cwd();
+
+			// Try loading from plugin's node_modules first
+			const nodePtyPaths = [
+				path.join(pluginDir, "node_modules", "node-pty"),
+				"node-pty", // Global fallback
+			];
+
+			for (const ptyPath of nodePtyPaths) {
+				try {
+					const nodePty = remote.require(ptyPath);
+					if (nodePty && typeof nodePty.spawn === "function") {
+						console.log(
+							"✅ node-pty loaded via @electron/remote from:",
+							ptyPath,
+						);
+						return nodePty;
+					}
+				} catch (err) {
+					console.debug(
+						`Failed to load node-pty from ${ptyPath}:`,
+						err,
+					);
+				}
+			}
+
+			console.debug("node-pty not found via @electron/remote");
+			return null;
+		} catch (error) {
+			console.debug("Failed to load via @electron/remote:", error);
+			return null;
+		}
+	}
+
+	// ============================================================
+	// Strategy 2: PTY Host Sidecar (Fallback)
 	// ============================================================
 
 	/**
@@ -702,12 +785,48 @@ export class ElectronBridge extends BaseElectronBridge {
 	// ============================================================
 
 	/**
+	 * Initialize PTY loading - tries strategies in order
+	 * 1. @electron/remote (direct main process loading)
+	 * 2. PTY Host Sidecar (separate process with IPC)
+	 */
+	private async initializePtyLoading(): Promise<void> {
+		if (this._ptyLoadMode !== null) {
+			return; // Already initialized
+		}
+
+		// Strategy 1: Try @electron/remote
+		console.log("🚀 Initializing PTY loading...");
+		const remotePty = await this.tryLoadViaElectronRemote();
+		if (remotePty) {
+			this._directNodePty = remotePty;
+			this._ptyLoadMode = "remote";
+			console.log("✅ PTY mode: @electron/remote (direct)");
+			return;
+		}
+
+		// Strategy 2: Fall back to Sidecar
+		console.log(
+			"⚠️ @electron/remote not available, falling back to Sidecar mode",
+		);
+		await this.ensureHostProcess();
+		this._ptyLoadMode = "sidecar";
+		console.log("✅ PTY mode: Sidecar (IPC)");
+	}
+
+	/**
 	 * Get a node-pty compatible interface
 	 *
-	 * Returns an object with a spawn method that creates RemotePty instances
-	 * connected to the PTY host sidecar.
+	 * Returns an object with a spawn method that works with either:
+	 * - Direct node-pty (via @electron/remote)
+	 * - RemotePty (via Sidecar IPC)
 	 */
 	getNodePTY(): { spawn: typeof import("node-pty").spawn } | null {
+		// If using direct mode, return the actual node-pty
+		if (this._ptyLoadMode === "remote" && this._directNodePty) {
+			return this._directNodePty;
+		}
+
+		// Otherwise return the sidecar-based spawn
 		return {
 			spawn: (file: string, args: string[], options: any) => {
 				return this.spawnRemotePty(file, args, options);
@@ -717,13 +836,20 @@ export class ElectronBridge extends BaseElectronBridge {
 
 	/**
 	 * Async version of getNodePTY
+	 * Initializes PTY loading if not already done
 	 */
 	async getNodePTYAsync(): Promise<{
 		spawn: typeof import("node-pty").spawn;
 	}> {
-		// Ensure host is running before returning the interface
-		await this.ensureHostProcess();
+		await this.initializePtyLoading();
 		return this.getNodePTY()!;
+	}
+
+	/**
+	 * Get current PTY loading mode
+	 */
+	getPtyLoadMode(): PtyLoadMode {
+		return this._ptyLoadMode;
 	}
 
 	/**
@@ -824,11 +950,20 @@ export class ElectronBridge extends BaseElectronBridge {
 	 * Cleanup resources on plugin unload
 	 */
 	cleanup(): void {
-		// Kill host process
-		if (this.hostState?.process && !this.hostState.process.killed) {
-			this.hostState.process.kill();
+		// Cleanup based on mode
+		if (this._ptyLoadMode === "remote") {
+			// Direct mode: just clear references
+			this._directNodePty = null;
+			console.log("✅ Cleaned up @electron/remote PTY resources");
+		} else if (this._ptyLoadMode === "sidecar") {
+			// Sidecar mode: kill host process
+			if (this.hostState?.process && !this.hostState.process.killed) {
+				this.hostState.process.kill();
+			}
+			this.handleHostExit();
+			console.log("✅ Cleaned up Sidecar PTY resources");
 		}
 
-		this.handleHostExit();
+		this._ptyLoadMode = null;
 	}
 }
