@@ -10,6 +10,10 @@ on:
                 description: "Version to release (e.g., 1.0.0)"
                 required: false
 
+permissions:
+    contents: write
+    actions: write
+
 env:
     ELECTRON_VERSION: "37.10.2"
     NODE_ABI: "136"
@@ -27,11 +31,11 @@ jobs:
                       platform: win32
                       arch: x64
                       node-version: "24"
-                    - os: macos-13 # Intel Mac
+                    - os: macos-15
                       platform: darwin
                       arch: x64
                       node-version: "24"
-                    - os: macos-14 # Apple Silicon
+                    - os: macos-15-arm
                       platform: darwin
                       arch: arm64
                       node-version: "24"
@@ -47,14 +51,19 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v4
 
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v4
+              with:
+                  version: 9
+
             - name: Setup Node.js
               uses: actions/setup-node@v4
               with:
                   node-version: ${{ matrix.node-version }}
-                  cache: "npm"
+                  cache: "pnpm"
 
             - name: Install dependencies
-              run: npm ci
+              run: pnpm install --frozen-lockfile
 
             # Windows-specific fixes
             - name: Fix source files (Windows)
@@ -70,7 +79,7 @@ jobs:
               run: node scripts/fix-electron-headers.mjs
 
             - name: Rebuild node-pty for Electron
-              run: npx @electron/rebuild -m node_modules/node-pty -v ${{ env.ELECTRON_VERSION }}
+              run: pnpm exec @electron/rebuild -m node_modules/node-pty -v ${{ env.ELECTRON_VERSION }}
 
             - name: Copy binaries
               run: node scripts/copy-node-pty-binaries.mjs
@@ -99,14 +108,19 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v4
 
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v4
+              with:
+                  version: 9
+
             - name: Setup Node.js
               uses: actions/setup-node@v4
               with:
                   node-version: "20"
-                  cache: "npm"
+                  cache: "pnpm"
 
             - name: Install dependencies
-              run: npm ci
+              run: pnpm install --frozen-lockfile
 
             # Download all native artifacts
             - name: Download Windows x64 binaries
@@ -138,7 +152,7 @@ jobs:
 
             # Build plugin
             - name: Build plugin
-              run: npm run build
+              run: pnpm run build
 
             # Get version from tag or manifest
             - name: Get version
