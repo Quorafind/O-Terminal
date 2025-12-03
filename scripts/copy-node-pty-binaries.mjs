@@ -11,7 +11,13 @@
  * This script copies the compiled .node files to the correct pnpm location.
  */
 
-import { existsSync, mkdirSync, readdirSync, copyFileSync } from "fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	copyFileSync,
+	chmodSync,
+} from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -88,6 +94,13 @@ function copyBuildDirectory(srcDir, destDir) {
 				const srcFile = join(srcReleaseDir, file);
 				const destFile = join(destReleaseDir, file);
 				copyFileSync(srcFile, destFile);
+
+				// Set executable permission for spawn-helper on Unix platforms
+				if (file === "spawn-helper" && process.platform !== "win32") {
+					chmodSync(destFile, 0o755);
+					console.log(`🔧 Set executable permission: ${file}`);
+				}
+
 				console.log(`✅ Copied: ${file} -> ${destReleaseDir}`);
 			}
 		}
@@ -116,6 +129,13 @@ function copyBuildDirectory(srcDir, destDir) {
 				const srcFile = join(srcDebugDir, file);
 				const destFile = join(destDebugDir, file);
 				copyFileSync(srcFile, destFile);
+
+				// Set executable permission for spawn-helper on Unix platforms
+				if (file === "spawn-helper" && process.platform !== "win32") {
+					chmodSync(destFile, 0o755);
+					console.log(`🔧 Set executable permission: ${file}`);
+				}
+
 				console.log(`✅ Copied: ${file} -> ${destDebugDir}`);
 			}
 		}

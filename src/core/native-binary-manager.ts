@@ -17,6 +17,7 @@ import {
 	statSync,
 	readdirSync,
 	rmSync,
+	chmodSync,
 } from "fs";
 import { join, dirname } from "path";
 import { requestUrl } from "obsidian";
@@ -461,7 +462,9 @@ export class NativeBinaryManager {
 				const packageJson = JSON.parse(content.toString("utf8"));
 				if (packageJson.version) {
 					version = packageJson.version;
-					console.log(`📦 Detected version from package.json: ${version}`);
+					console.log(
+						`📦 Detected version from package.json: ${version}`,
+					);
 				}
 			} catch (e) {
 				console.warn("Failed to parse package.json for version:", e);
@@ -497,6 +500,16 @@ export class NativeBinaryManager {
 			}
 
 			writeFileSync(targetPath, content);
+
+			// Set executable permission for spawn-helper on Unix platforms
+			if (
+				process.platform !== "win32" &&
+				relativePath.includes("spawn-helper")
+			) {
+				chmodSync(targetPath, 0o755);
+				console.log(`🔧 Set executable permission: ${relativePath}`);
+			}
+
 			console.log(
 				`📄 Extracted: ${relativePath} (${Math.round(content.length / 1024)} KB)`,
 			);
@@ -638,6 +651,16 @@ export class NativeBinaryManager {
 			}
 
 			writeFileSync(targetPath, content);
+
+			// Set executable permission for spawn-helper on Unix platforms
+			if (
+				process.platform !== "win32" &&
+				relativePath.includes("spawn-helper")
+			) {
+				chmodSync(targetPath, 0o755);
+				console.log(`🔧 Set executable permission: ${relativePath}`);
+			}
+
 			console.log(
 				`📄 Extracted: ${relativePath} (${Math.round(content.length / 1024)} KB)`,
 			);
