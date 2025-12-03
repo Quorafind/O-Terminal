@@ -208,6 +208,24 @@ export class NativeBinaryManager {
 		});
 
 		if (response.status !== 200) {
+			if (response.status === 403) {
+				// Check if it's a rate limit issue
+				const rateLimitRemaining =
+					response.headers?.["x-ratelimit-remaining"];
+				if (rateLimitRemaining === "0") {
+					throw new Error(
+						"GitHub API rate limit exceeded. Please wait an hour or try again later.",
+					);
+				}
+				throw new Error(
+					"GitHub API access denied (403). The repository may be private or inaccessible.",
+				);
+			}
+			if (response.status === 404) {
+				throw new Error(
+					`Repository not found: ${repo}. Please check the repository URL in settings.`,
+				);
+			}
 			throw new Error(
 				`Failed to fetch releases: HTTP ${response.status}`,
 			);

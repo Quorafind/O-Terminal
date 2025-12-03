@@ -200,6 +200,7 @@
 .terminal-settings button.mod-cta:hover {
 	background: var(--term-cyan) !important;
 	box-shadow: 0 0 10px var(--term-cyan) !important;
+	color: var(--text-on-accent) !important;
 }
 .terminal-settings button.mod-warning {
 	border-color: var(--term-red) !important;
