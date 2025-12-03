@@ -12,7 +12,7 @@ import {
 	NativeBinaryManager,
 	BinaryStatus,
 } from "@/core";
-import { TerminalView } from "@/views";
+import { TerminalView, resetGhosttyState } from "@/views";
 import {
 	TerminalSettingsTab,
 	DEFAULT_SETTINGS,
@@ -174,6 +174,9 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 			if (this.ptyManager) {
 				this.ptyManager.cleanup();
 			}
+
+			// Reset Ghostty WASM state for hot reload
+			resetGhosttyState();
 
 			console.log(`${PLUGIN_ID} unloaded successfully`);
 		} catch (error) {

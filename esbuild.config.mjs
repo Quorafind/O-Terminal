@@ -62,6 +62,23 @@ const renamePluginWithDir = {
 const prod = process.argv[2] === "production";
 
 /**
+ * Plugin to handle WASM files as base64 embedded data
+ */
+const wasmPlugin = {
+	name: "wasm-loader",
+	setup(build) {
+		build.onLoad({ filter: /\.wasm$/ }, async (args) => {
+			const wasmBuffer = readFileSync(args.path);
+			const base64 = wasmBuffer.toString("base64");
+			return {
+				contents: `export default "${base64}";`,
+				loader: "js",
+			};
+		});
+	},
+};
+
+/**
  * Plugin to handle TypeScript path aliases (@/*)
  */
 const aliasPlugin = {
@@ -108,7 +125,12 @@ async function buildMain() {
 		...sharedOptions,
 		banner: { js: banner },
 		entryPoints: ["src/main.ts"],
-		plugins: [aliasPlugin, inlineCssPlugin, renamePluginWithDir],
+		plugins: [
+			aliasPlugin,
+			inlineCssPlugin,
+			wasmPlugin,
+			renamePluginWithDir,
+		],
 		external: [
 			"obsidian",
 			"electron",

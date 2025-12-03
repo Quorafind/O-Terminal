@@ -1,6 +1,10 @@
 import { ItemView } from "obsidian";
-import { Terminal } from "@xterm/xterm";
+import { Terminal as XTerminal } from "@xterm/xterm";
+import { Terminal as GhosttyTerminal } from "ghostty-web";
 import { IPty } from "./pty";
+
+// Union type for terminal instances (xterm.js or ghostty-web)
+export type Terminal = XTerminal | GhosttyTerminal;
 
 /**
  * Terminal plugin main interface

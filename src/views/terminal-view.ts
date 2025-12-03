@@ -1,12 +1,18 @@
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
+import { Terminal as XTerminal } from "@xterm/xterm";
+import { FitAddon as XTermFitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import {
+	init as initGhostty,
+	Terminal as GhosttyTerminal,
+	FitAddon as GhosttyFitAddon,
+} from "ghostty-web";
 import { WorkspaceLeaf, Menu } from "obsidian";
 import {
 	TerminalView as BaseTerminalView,
 	TerminalSession,
 	TerminalPluginError,
 	TerminalErrorType,
+	Terminal,
 } from "@/types";
 import {
 	VIEW_TYPE_TERMINAL,
@@ -18,6 +24,24 @@ import { DEFAULT_SETTINGS } from "@/settings";
 
 // Import xterm.js CSS as string for Shadow DOM injection
 import xtermCss from "@xterm/xterm/css/xterm.css?inline";
+
+// Type alias for FitAddon (xterm.js or ghostty-web)
+type FitAddon = XTermFitAddon | GhosttyFitAddon;
+
+// Track Ghostty WASM initialization state
+let ghosttyInitialized = false;
+let ghosttyInitPromise: Promise<void> | null = null;
+
+/**
+ * Reset Ghostty WASM state on plugin unload
+ * This allows proper reinitialization on hot reload
+ */
+export function resetGhosttyState(): void {
+	ghosttyInitialized = false;
+	ghosttyInitPromise = null;
+	shellSessions.clear();
+	console.log("✅ Ghostty state reset for hot reload");
+}
 
 /**
  * Shadow DOM styles for terminal
@@ -141,7 +165,9 @@ export class TerminalView extends BaseTerminalView {
 	private shadowRoot: ShadowRoot | null = null;
 	private shadowContainer: HTMLElement | null = null;
 	private fitAddon!: FitAddon;
-	private webLinksAddon!: WebLinksAddon;
+	private webLinksAddon?: WebLinksAddon;
+	private imeTextarea?: HTMLTextAreaElement;
+	private isComposing = false;
 	private disposables: Array<{ dispose(): void }> = [];
 	private isInitialized = false;
 	private isConnected = false;
@@ -275,6 +301,13 @@ export class TerminalView extends BaseTerminalView {
 	}
 
 	/**
+	 * Check if Ghostty renderer is enabled
+	 */
+	private get useGhostty(): boolean {
+		return this.plugin.settings?.useGhostty ?? false;
+	}
+
+	/**
 	 * Initialize the terminal instance with Shadow DOM
 	 */
 	private async initializeTerminal(): Promise<void> {
@@ -286,6 +319,11 @@ export class TerminalView extends BaseTerminalView {
 		this.initializationState = "initializing";
 
 		try {
+			// Initialize Ghostty WASM if needed (once per app lifecycle)
+			if (this.useGhostty) {
+				await this.ensureGhosttyInitialized();
+			}
+
 			this.createShadowDOM();
 			this.createTerminalInstance();
 			this.loadAddons();
@@ -294,14 +332,26 @@ export class TerminalView extends BaseTerminalView {
 			this.setupKeyboardHandlers();
 			this.setupContextMenu();
 
+			// Setup IME support for Ghostty mode
+			if (this.useGhostty) {
+				this.setupGhosttyIME();
+			}
+
 			// Initial fit after a short delay to ensure DOM is ready
 			requestAnimationFrame(() => {
 				this.fitAddon.fit();
-				this.terminal.focus();
+				// In Ghostty mode, focus IME textarea for keyboard input
+				// In xterm.js mode, focus terminal directly
+				if (this.useGhostty && this.imeTextarea) {
+					this.imeTextarea.focus();
+				} else {
+					this.terminal.focus();
+				}
 			});
 
 			this.initializationState = "ready";
-			console.log("✅ Terminal initialization complete (Shadow DOM)");
+			const renderer = this.useGhostty ? "Ghostty" : "xterm.js";
+			console.log(`✅ Terminal initialization complete (${renderer})`);
 		} catch (error) {
 			this.initializationState = "error";
 			throw new TerminalPluginError(
@@ -310,6 +360,242 @@ export class TerminalView extends BaseTerminalView {
 				error as Error,
 			);
 		}
+	}
+
+	/**
+	 * Ensure Ghostty WASM is initialized (singleton pattern)
+	 */
+	private async ensureGhosttyInitialized(): Promise<void> {
+		if (ghosttyInitialized) return;
+
+		if (!ghosttyInitPromise) {
+			ghosttyInitPromise = initGhostty().then(() => {
+				ghosttyInitialized = true;
+				console.log("✅ Ghostty WASM initialized");
+			});
+		}
+
+		await ghosttyInitPromise;
+	}
+
+	/**
+	 * Setup IME (Input Method Editor) support for Ghostty mode
+	 * Ghostty-web doesn't natively support IME, so we create a hidden textarea
+	 * to capture composition events and forward the final text to the terminal.
+	 */
+	private setupGhosttyIME(): void {
+		if (!this.shadowContainer) return;
+
+		// Create hidden textarea for IME input
+		this.imeTextarea = document.createElement("textarea");
+		this.imeTextarea.setAttribute("autocorrect", "off");
+		this.imeTextarea.setAttribute("autocapitalize", "off");
+		this.imeTextarea.setAttribute("spellcheck", "false");
+		this.imeTextarea.setAttribute("aria-label", "Terminal IME input");
+
+		// Style to be invisible but still functional for IME
+		Object.assign(this.imeTextarea.style, {
+			position: "absolute",
+			left: "0",
+			top: "0",
+			width: "1px",
+			height: "1px",
+			opacity: "0",
+			zIndex: "-5",
+			overflow: "hidden",
+			resize: "none",
+			border: "none",
+			outline: "none",
+			padding: "0",
+			margin: "0",
+			pointerEvents: "none",
+		});
+
+		this.shadowContainer.appendChild(this.imeTextarea);
+
+		// Composition start - user begins IME input
+		const onCompositionStart = () => {
+			this.isComposing = true;
+		};
+
+		// Composition end - user confirms IME input
+		const onCompositionEnd = (e: CompositionEvent) => {
+			this.isComposing = false;
+			const text = e.data;
+			if (text && this.terminalSession.ptyProcess) {
+				this.terminalSession.ptyProcess.write(text);
+			}
+			// Clear textarea for next input
+			if (this.imeTextarea) {
+				this.imeTextarea.value = "";
+			}
+			// In Ghostty mode, keep focus on IME textarea for keyboard handling
+			// (Ghostty's native keyboard handling doesn't work well in Electron)
+		};
+
+		// Handle keydown in IME textarea - forward non-IME keys to terminal
+		const onTextareaKeyDown = (e: KeyboardEvent) => {
+			// During composition, let textarea handle it
+			if (this.isComposing || e.isComposing) {
+				return;
+			}
+
+			const key = e.key;
+
+			// Allow modifier keys to pass through for IME switching (e.g., Shift to toggle input method)
+			if (
+				key === "Shift" ||
+				key === "Control" ||
+				key === "Alt" ||
+				key === "Meta" ||
+				key === "CapsLock"
+			) {
+				return;
+			}
+
+			// For control keys, forward to PTY directly
+			let data: string | null = null;
+
+			switch (key) {
+				case "Backspace":
+					data = "\x7f"; // DEL character
+					break;
+				case "Delete":
+					data = "\x1b[3~";
+					break;
+				case "Enter":
+					data = "\r";
+					break;
+				case "Tab":
+					data = "\t";
+					break;
+				case "Escape":
+					data = "\x1b";
+					break;
+				case "ArrowUp":
+					data = "\x1b[A";
+					break;
+				case "ArrowDown":
+					data = "\x1b[B";
+					break;
+				case "ArrowRight":
+					data = "\x1b[C";
+					break;
+				case "ArrowLeft":
+					data = "\x1b[D";
+					break;
+				case "Home":
+					data = "\x1b[H";
+					break;
+				case "End":
+					data = "\x1b[F";
+					break;
+				case "PageUp":
+					data = "\x1b[5~";
+					break;
+				case "PageDown":
+					data = "\x1b[6~";
+					break;
+			}
+
+			// Handle Ctrl+key combinations
+			if (e.ctrlKey && key.length === 1) {
+				const charCode = key.toUpperCase().charCodeAt(0);
+				if (charCode >= 65 && charCode <= 90) {
+					// A-Z
+					data = String.fromCharCode(charCode - 64);
+				}
+			}
+
+			if (data !== null) {
+				e.preventDefault();
+				e.stopPropagation();
+				if (this.terminalSession.ptyProcess) {
+					this.terminalSession.ptyProcess.write(data);
+				}
+				return;
+			}
+
+			// For printable characters (single char, no ctrl/alt/meta), let input event handle it
+			if (key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+				// Will be handled by input event
+				return;
+			}
+		};
+
+		// Handle input events (for non-composition input that goes through textarea)
+		const onInput = (e: Event) => {
+			if (this.isComposing) return; // Skip during composition
+			const target = e.target as HTMLTextAreaElement;
+			const text = target.value;
+			if (text && this.terminalSession.ptyProcess) {
+				this.terminalSession.ptyProcess.write(text);
+			}
+			target.value = "";
+		};
+
+		this.imeTextarea.addEventListener(
+			"compositionstart",
+			onCompositionStart,
+		);
+		this.imeTextarea.addEventListener("compositionend", onCompositionEnd);
+		this.imeTextarea.addEventListener("keydown", onTextareaKeyDown);
+		this.imeTextarea.addEventListener("input", onInput);
+
+		this.disposables.push({
+			dispose: () => {
+				this.imeTextarea?.removeEventListener(
+					"compositionstart",
+					onCompositionStart,
+				);
+				this.imeTextarea?.removeEventListener(
+					"compositionend",
+					onCompositionEnd,
+				);
+				this.imeTextarea?.removeEventListener(
+					"keydown",
+					onTextareaKeyDown,
+				);
+				this.imeTextarea?.removeEventListener("input", onInput);
+			},
+		});
+
+		// Intercept keyboard events on the terminal container to redirect to IME textarea
+		const container = this.shadowContainer;
+		const onContainerKeyDown = (e: KeyboardEvent) => {
+			// Check if this might trigger IME (non-ASCII input or specific keys)
+			// For CJK input methods, the key is often "Process" or the event.isComposing is true
+			if (e.key === "Process" || e.isComposing) {
+				e.preventDefault();
+				e.stopPropagation();
+				this.imeTextarea?.focus();
+				return;
+			}
+		};
+
+		container.addEventListener("keydown", onContainerKeyDown, {
+			capture: true,
+		});
+		this.disposables.push({
+			dispose: () =>
+				container.removeEventListener("keydown", onContainerKeyDown, {
+					capture: true,
+				}),
+		});
+
+		// When clicking on terminal, focus IME textarea to enable IME input
+		const onClick = () => {
+			if (this.imeTextarea && this.useGhostty) {
+				this.imeTextarea.focus();
+			}
+		};
+
+		container.addEventListener("click", onClick);
+		this.disposables.push({
+			dispose: () => container.removeEventListener("click", onClick),
+		});
+
+		console.log("✅ Ghostty IME support initialized");
 	}
 
 	/**
@@ -345,7 +631,7 @@ export class TerminalView extends BaseTerminalView {
 	}
 
 	/**
-	 * Create xterm.js terminal instance
+	 * Create terminal instance (xterm.js or ghostty-web)
 	 */
 	private createTerminalInstance(): void {
 		const theme = this.plugin.themeColors;
@@ -353,41 +639,59 @@ export class TerminalView extends BaseTerminalView {
 		// 从插件设置读取配置，提供安全回退值
 		const settings = this.plugin.settings;
 		const fontSize = settings?.fontSize ?? DEFAULT_SETTINGS.fontSize;
-		const fontFamily = settings?.fontFamily ?? DEFAULT_SETTINGS.fontFamily;
+		const fontFamily = this.useGhostty
+			? "'Monaco', 'Menlo', 'Consolas', 'Courier New', monospace"
+			: (settings?.fontFamily ?? DEFAULT_SETTINGS.fontFamily);
 		const cursorBlink =
 			settings?.cursorBlink ?? DEFAULT_SETTINGS.cursorBlink;
 		const scrollback = settings?.scrollback ?? DEFAULT_SETTINGS.scrollback;
 
-		this.terminal = new Terminal({
+		const terminalOptions = {
 			fontSize,
 			fontFamily,
 			cursorBlink,
-			cursorStyle: "block",
-			allowTransparency: true,
+			cursorStyle: "block" as const,
 			theme,
 			cols: DEFAULT_TERMINAL_DIMENSIONS.cols,
 			rows: DEFAULT_TERMINAL_DIMENSIONS.rows,
 			scrollback,
-			// 启用 Windows 模式以更好支持 ConPTY
-			windowsMode: process.platform === "win32",
-			// 允许透明度以支持 Obsidian 主题
-			allowProposedApi: true,
-		});
+		};
 
-		console.log("✅ xterm.js Terminal instance created");
+		if (this.useGhostty) {
+			// Create Ghostty terminal instance
+			this.terminal = new GhosttyTerminal(terminalOptions);
+			console.log("✅ Ghostty Terminal instance created");
+		} else {
+			// Create xterm.js terminal instance
+			this.terminal = new XTerminal({
+				...terminalOptions,
+				allowTransparency: true,
+				// 启用 Windows 模式以更好支持 ConPTY
+				windowsMode: process.platform === "win32",
+				// 允许透明度以支持 Obsidian 主题
+				allowProposedApi: true,
+			});
+			console.log("✅ xterm.js Terminal instance created");
+		}
 	}
 
 	/**
-	 * Load xterm.js addons
+	 * Load terminal addons
 	 */
 	private loadAddons(): void {
-		this.fitAddon = new FitAddon();
-		this.webLinksAddon = new WebLinksAddon();
-
-		this.terminal.loadAddon(this.fitAddon);
-		this.terminal.loadAddon(this.webLinksAddon);
-
-		console.log("✅ xterm.js addons loaded");
+		if (this.useGhostty) {
+			// Ghostty has built-in FitAddon, no need for WebLinksAddon (has built-in link detection)
+			this.fitAddon = new GhosttyFitAddon();
+			this.terminal.loadAddon(this.fitAddon);
+			console.log("✅ Ghostty addons loaded");
+		} else {
+			// xterm.js addons
+			this.fitAddon = new XTermFitAddon();
+			this.webLinksAddon = new WebLinksAddon();
+			this.terminal.loadAddon(this.fitAddon);
+			this.terminal.loadAddon(this.webLinksAddon);
+			console.log("✅ xterm.js addons loaded");
+		}
 	}
 
 	/**
@@ -576,7 +880,10 @@ export class TerminalView extends BaseTerminalView {
 	 * Focus the terminal
 	 */
 	focus(): void {
-		if (this.terminal) {
+		// In Ghostty mode, focus IME textarea for keyboard input
+		if (this.useGhostty && this.imeTextarea) {
+			this.imeTextarea.focus();
+		} else if (this.terminal) {
 			this.terminal.focus();
 		}
 	}

@@ -302,29 +302,11 @@ export class PTYManager extends BasePTYManager {
 
 		switch (proc.platform) {
 			case "win32":
-				return [
-					"powershell.exe",
-					"cmd.exe",
-					"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-					"C:\\Windows\\System32\\cmd.exe",
-				];
+				return ["powershell.exe", "cmd.exe"];
 			case "darwin":
-				return [
-					"/bin/zsh",
-					"/bin/bash",
-					"/bin/sh",
-					"/usr/local/bin/zsh",
-					"/usr/local/bin/bash",
-				];
+				return ["/bin/zsh", "/bin/bash", "/bin/sh"];
 			case "linux":
-				return [
-					"/bin/bash",
-					"/bin/sh",
-					"/bin/zsh",
-					"/usr/bin/bash",
-					"/usr/bin/sh",
-					"/usr/bin/zsh",
-				];
+				return ["/bin/bash", "/bin/sh", "/bin/zsh"];
 			default:
 				return ["/bin/sh"];
 		}

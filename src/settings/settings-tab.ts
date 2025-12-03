@@ -38,6 +38,8 @@ export interface TerminalPluginSettings {
 	scrollback: number;
 	// Native binary settings
 	githubRepo: string;
+	// Experimental features
+	useGhostty: boolean;
 }
 
 /**
@@ -51,6 +53,7 @@ export const DEFAULT_SETTINGS: TerminalPluginSettings = {
 	cursorBlink: true,
 	scrollback: 1000,
 	githubRepo: "quorafind/obsidian-terminal",
+	useGhostty: false,
 };
 
 /**
@@ -85,6 +88,9 @@ export class TerminalSettingsTab extends PluginSettingTab {
 
 		// Shell Settings Section
 		this.displayShellSection(containerEl);
+
+		// Experimental Section
+		this.displayExperimentalSection(containerEl);
 	}
 
 	/**
@@ -624,6 +630,36 @@ export class TerminalSettingsTab extends PluginSettingTab {
 								.map((s) => s.trim())
 								.filter((s) => s.length > 0);
 							await this.plugin.saveSettings();
+						}
+					});
+			});
+	}
+
+	/**
+	 * Display experimental settings section
+	 */
+	private displayExperimentalSection(containerEl: HTMLElement): void {
+		containerEl.createEl("h2", { text: "Experimental" });
+
+		new Setting(containerEl)
+			.setName("Use Ghostty Renderer")
+			.setDesc(
+				"Use ghostty-web (WebAssembly) instead of xterm.js for terminal rendering. " +
+					"This is experimental and may have compatibility issues. Requires plugin reload.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(
+						this.plugin.settings?.useGhostty ??
+							DEFAULT_SETTINGS.useGhostty,
+					)
+					.onChange(async (value) => {
+						if (this.plugin.settings) {
+							this.plugin.settings.useGhostty = value;
+							await this.plugin.saveSettings();
+							new Notice(
+								"Please reload the plugin to apply this change.",
+							);
 						}
 					});
 			});
