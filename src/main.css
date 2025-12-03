@@ -8,3 +8,7 @@
 		Monaco, "Courier New", "Apple Color Emoji", "Segoe UI Emoji",
 		"Segoe UI Symbol", "Noto Color Emoji", monospace;
 }
+
+.workspace-leaf-content[data-type="terminal-view"] .view-header {
+	display: none;
+}

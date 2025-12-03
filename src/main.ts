@@ -1,4 +1,11 @@
-import { Plugin, WorkspaceLeaf, Notice, Platform, Menu } from "obsidian";
+import {
+	Plugin,
+	WorkspaceLeaf,
+	Notice,
+	Platform,
+	Menu,
+	debounce,
+} from "obsidian";
 import * as path from "path";
 import {
 	ITerminalPlugin,
@@ -372,15 +379,11 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 		});
 
 		// Handle theme/CSS changes
-		this.registerEvent(
-			this.app.workspace.on("css-change", () => {
-				this.themeColors = this.resolveThemeColors();
-				// Update all terminal views with new theme
-				for (const view of this.getTerminalViews()) {
-					view.updateTheme(this.themeColors);
-				}
-			}),
-		);
+		// this.registerEvent(
+		// 	this.app.workspace.on("css-change", () => {
+		// 		this.debounceUpdateAllViews();
+		// 	}),
+		// );
 
 		// Intercept "New Tab" button clicks to show menu (Desktop only)
 		if (Platform.isDesktop) {
@@ -457,6 +460,14 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 			}
 		}, delay);
 	}
+
+	private debounceUpdateAllViews = debounce(() => {
+		this.themeColors = this.resolveThemeColors();
+		// Update all terminal views with new theme
+		for (const view of this.getTerminalViews()) {
+			view.updateTheme(this.themeColors);
+		}
+	}, 200);
 
 	/**
 	 * Get or create a terminal leaf

@@ -398,8 +398,8 @@ export class TerminalView extends BaseTerminalView {
 			position: "absolute",
 			left: "0",
 			top: "0",
-			width: "1px",
-			height: "1px",
+			width: "0px",
+			height: "0px",
 			opacity: "0",
 			zIndex: "-5",
 			overflow: "hidden",
@@ -595,6 +595,26 @@ export class TerminalView extends BaseTerminalView {
 			dispose: () => container.removeEventListener("click", onClick),
 		});
 
+		// Block Ghostty's native contextmenu handler which causes layout shift
+		// Ghostty registers its handler on the container element (A in open(A))
+		// We intercept in capture phase and show our own menu instead
+		const onContextMenu = (e: MouseEvent) => {
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			// Manually show our context menu
+			this.showContextMenu(e);
+		};
+
+		container.addEventListener("contextmenu", onContextMenu, {
+			capture: true,
+		});
+		this.disposables.push({
+			dispose: () =>
+				container.removeEventListener("contextmenu", onContextMenu, {
+					capture: true,
+				}),
+		});
+
 		console.log("✅ Ghostty IME support initialized");
 	}
 
@@ -754,9 +774,183 @@ export class TerminalView extends BaseTerminalView {
 	 * Called by plugin when Obsidian theme changes (css-change event)
 	 */
 	updateTheme(theme: Record<string, string>): void {
-		if (this.terminal) {
+		console.log("🎨 updateTheme called", {
+			useGhostty: this.useGhostty,
+			hasTerminal: !!this.terminal,
+		});
+
+		if (!this.terminal) return;
+
+		if (this.useGhostty) {
+			// ghostty-web 0.3.0 limitation: theme changes after open() are not supported
+			// Cell colors are baked into WASM memory. We must rebuild the terminal.
+			this.rebuildGhosttyTerminal(theme);
+		} else {
+			// xterm.js handles theme changes automatically via options
 			this.terminal.options.theme = theme;
 		}
+	}
+
+	/**
+	 * Rebuild Ghostty terminal with new theme
+	 * Extracts buffer content, destroys terminal, creates new one with new theme,
+	 * and restores the buffer content.
+	 */
+	private rebuildGhosttyTerminal(theme: Record<string, string>): void {
+		if (!this.useGhostty || !this.terminal || !this.shadowContainer) {
+			return;
+		}
+
+		console.log("🔄 Rebuilding Ghostty terminal with new theme");
+
+		const term = this.terminal as any;
+
+		// Step 1: Extract buffer content as plain text
+		const bufferContent = this.extractGhosttyBuffer(term);
+		console.log("🔄 Extracted buffer:", bufferContent.length, "lines");
+
+		// Step 2: Get current dimensions
+		const cols = term.cols ?? DEFAULT_TERMINAL_DIMENSIONS.cols;
+		const rows = term.rows ?? DEFAULT_TERMINAL_DIMENSIONS.rows;
+
+		// Step 3: Dispose old terminal (but keep PTY connection)
+		// Remove terminal-specific disposables, keep PTY handlers
+		if (this.fitAddon) {
+			try {
+				this.fitAddon.dispose();
+			} catch {
+				// Ignore
+			}
+			this.fitAddon = null as any;
+		}
+
+		// Clear the shadow container
+		if (this.shadowContainer) {
+			this.shadowContainer.innerHTML = "";
+		}
+
+		// Dispose old terminal
+		try {
+			this.terminal.dispose();
+		} catch {
+			// Ignore disposal errors
+		}
+
+		// Step 4: Create new terminal with new theme
+		const settings = this.plugin.settings;
+		const fontSize = settings?.fontSize ?? DEFAULT_SETTINGS.fontSize;
+		const fontFamily =
+			"'Monaco', 'Menlo', 'Consolas', 'Courier New', monospace";
+		const cursorBlink =
+			settings?.cursorBlink ?? DEFAULT_SETTINGS.cursorBlink;
+		const scrollback = settings?.scrollback ?? DEFAULT_SETTINGS.scrollback;
+
+		this.terminal = new GhosttyTerminal({
+			fontSize,
+			fontFamily,
+			cursorBlink,
+			cursorStyle: "block" as const,
+			theme,
+			cols,
+			rows,
+			scrollback,
+		});
+
+		console.log("🔄 New Ghostty terminal created");
+
+		// Step 5: Load addons
+		this.fitAddon = new GhosttyFitAddon();
+		this.terminal.loadAddon(this.fitAddon);
+
+		// Step 6: Open in shadow container
+		this.terminal.open(this.shadowContainer);
+
+		// Step 7: Reconnect data handler (PTY output -> terminal)
+		// Note: PTY -> terminal handler was on ptyProcess, still active
+		// We only need to reconnect terminal -> PTY (user input)
+		const { ptyProcess } = this.terminalSession;
+		const dataDisposable = this.terminal.onData((data: string) => {
+			try {
+				ptyProcess.write(data);
+			} catch (error) {
+				console.error("Failed to write to PTY:", error);
+			}
+		});
+		this.disposables.push(dataDisposable);
+
+		// Step 8: Restore buffer content
+		if (bufferContent.length > 0) {
+			// Write content back (convert to terminal format with CRLF)
+			const content = bufferContent.join("\r\n");
+			this.terminal.write(content);
+		}
+
+		// Step 9: Fit to container
+		requestAnimationFrame(() => {
+			if (this.fitAddon) {
+				try {
+					this.fitAddon.fit();
+				} catch {
+					// Ignore fit errors
+				}
+			}
+		});
+
+		console.log("🔄 Ghostty terminal rebuild complete");
+	}
+
+	/**
+	 * Extract text content from Ghostty terminal buffer
+	 */
+	private extractGhosttyBuffer(term: any): string[] {
+		const lines: string[] = [];
+
+		if (!term.wasmTerm) {
+			return lines;
+		}
+
+		const wasmTerm = term.wasmTerm;
+		const dims = wasmTerm.getDimensions();
+		const scrollbackLen = wasmTerm.getScrollbackLength();
+
+		// Extract scrollback lines
+		for (let i = 0; i < scrollbackLen; i++) {
+			const cells = wasmTerm.getScrollbackLine(i);
+			if (cells) {
+				lines.push(this.cellsToString(cells));
+			}
+		}
+
+		// Extract visible screen lines
+		for (let y = 0; y < dims.rows; y++) {
+			const cells = wasmTerm.getLine(y);
+			if (cells) {
+				lines.push(this.cellsToString(cells));
+			}
+		}
+
+		// Trim trailing empty lines
+		while (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+			lines.pop();
+		}
+
+		return lines;
+	}
+
+	/**
+	 * Convert GhosttyCell array to string
+	 */
+	private cellsToString(cells: any[]): string {
+		let str = "";
+		for (const cell of cells) {
+			if (cell.codepoint > 0) {
+				str += String.fromCodePoint(cell.codepoint);
+			} else if (cell.width > 0) {
+				str += " ";
+			}
+		}
+		// Trim trailing spaces
+		return str.trimEnd();
 	}
 
 	/**
@@ -968,109 +1162,111 @@ export class TerminalView extends BaseTerminalView {
 	private setupContextMenu(): void {
 		if (!this.shadowContainer) return;
 
+		// For Ghostty mode, contextmenu is handled in setupGhosttyIME
+		// to intercept before Ghostty's handler causes layout shift
+		if (this.useGhostty) return;
+
 		this.shadowContainer.addEventListener(
 			"contextmenu",
 			(event: MouseEvent) => {
 				event.preventDefault();
 				event.stopPropagation();
-
-				const menu = new Menu();
-
-				// Copy selected text
-				if (this.terminal.hasSelection()) {
-					menu.addItem((item) =>
-						item
-							.setTitle("Copy")
-							.setIcon("copy")
-							.onClick(() => {
-								const selection = this.terminal.getSelection();
-								if (selection) {
-									navigator.clipboard
-										.writeText(selection)
-										.catch((err) => {
-											console.error(
-												"Failed to copy:",
-												err,
-											);
-										});
-								}
-							}),
-					);
-				}
-
-				// Paste
-				menu.addItem((item) =>
-					item
-						.setTitle("Paste")
-						.setIcon("clipboard-paste")
-						.onClick(() => {
-							navigator.clipboard
-								.readText()
-								.then((text) => {
-									if (
-										text &&
-										this.terminalSession.ptyProcess
-									) {
-										this.terminalSession.ptyProcess.write(
-											text,
-										);
-									}
-								})
-								.catch((err) => {
-									console.error("Failed to paste:", err);
-								});
-						}),
-				);
-
-				menu.addSeparator();
-
-				// Clear terminal
-				menu.addItem((item) =>
-					item
-						.setTitle("Clear")
-						.setIcon("trash-2")
-						.onClick(() => {
-							this.clear();
-						}),
-				);
-
-				// Select all
-				menu.addItem((item) =>
-					item
-						.setTitle("Select All")
-						.setIcon("text-select")
-						.onClick(() => {
-							this.terminal.selectAll();
-						}),
-				);
-
-				menu.addSeparator();
-
-				// Restart terminal
-				menu.addItem((item) =>
-					item
-						.setTitle("Restart")
-						.setIcon("refresh-cw")
-						.onClick(() => {
-							this.restartTerminal();
-						}),
-				);
-
-				// New terminal (trigger plugin command)
-				menu.addItem((item) =>
-					item
-						.setTitle("New Terminal")
-						.setIcon("terminal")
-						.onClick(() => {
-							(this.app as any).commands.executeCommandById(
-								"obsidian-terminal-view:open-terminal",
-							);
-						}),
-				);
-
-				menu.showAtMouseEvent(event);
+				this.showContextMenu(event);
 			},
 		);
+	}
+
+	/**
+	 * 显示右键上下文菜单
+	 */
+	private showContextMenu(event: MouseEvent): void {
+		const menu = new Menu();
+
+		// Copy selected text
+		if (this.terminal.hasSelection()) {
+			menu.addItem((item) =>
+				item
+					.setTitle("Copy")
+					.setIcon("copy")
+					.onClick(() => {
+						const selection = this.terminal.getSelection();
+						if (selection) {
+							navigator.clipboard
+								.writeText(selection)
+								.catch((err) => {
+									console.error("Failed to copy:", err);
+								});
+						}
+					}),
+			);
+		}
+
+		// Paste
+		menu.addItem((item) =>
+			item
+				.setTitle("Paste")
+				.setIcon("clipboard-paste")
+				.onClick(() => {
+					navigator.clipboard
+						.readText()
+						.then((text) => {
+							if (text && this.terminalSession.ptyProcess) {
+								this.terminalSession.ptyProcess.write(text);
+							}
+						})
+						.catch((err) => {
+							console.error("Failed to paste:", err);
+						});
+				}),
+		);
+
+		menu.addSeparator();
+
+		// Clear terminal
+		menu.addItem((item) =>
+			item
+				.setTitle("Clear")
+				.setIcon("trash-2")
+				.onClick(() => {
+					this.clear();
+				}),
+		);
+
+		// Select all
+		menu.addItem((item) =>
+			item
+				.setTitle("Select All")
+				.setIcon("text-select")
+				.onClick(() => {
+					this.terminal.selectAll();
+				}),
+		);
+
+		menu.addSeparator();
+
+		// Restart terminal
+		menu.addItem((item) =>
+			item
+				.setTitle("Restart")
+				.setIcon("refresh-cw")
+				.onClick(() => {
+					this.restartTerminal();
+				}),
+		);
+
+		// New terminal (trigger plugin command)
+		menu.addItem((item) =>
+			item
+				.setTitle("New Terminal")
+				.setIcon("terminal")
+				.onClick(() => {
+					(this.app as any).commands.executeCommandById(
+						"obsidian-terminal-view:open-terminal",
+					);
+				}),
+		);
+
+		menu.showAtMouseEvent(event);
 	}
 
 	/**
