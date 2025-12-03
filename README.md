@@ -43,7 +43,7 @@
 
 ## 💿 Installation
 
-### Method 1: Community Plugins (Recommended)
+### Method 1: Community Plugins (Recommended) [But not available yet]
 
 *Coming Soon...*
 
