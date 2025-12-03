@@ -9,7 +9,7 @@ export const VIEW_TYPE_TERMINAL = "terminal-view";
 export const TERMINAL_VIEW_DISPLAY_TEXT = "Terminal";
 
 export const COMMAND_OPEN_TERMINAL = "open-terminal";
-export const COMMAND_OPEN_TERMINAL_NAME = "打开终端";
+export const COMMAND_OPEN_TERMINAL_NAME = "Open";
 
 export const DEFAULT_TERMINAL_DIMENSIONS = {
 	cols: 80,

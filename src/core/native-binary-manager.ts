@@ -15,8 +15,10 @@ import {
 	readFileSync,
 	unlinkSync,
 	statSync,
+	readdirSync,
+	rmSync,
 } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { requestUrl } from "obsidian";
 import {
 	MODULE_INFO,
@@ -93,12 +95,14 @@ const CURRENT_CONFIG = {
 export class NativeBinaryManager {
 	private pluginDir: string;
 	private binaryDir: string;
+	private nodePtyDir: string;
 	private manifestPath: string;
 	private platformKey: string;
 
 	constructor(pluginDir: string) {
 		this.pluginDir = pluginDir;
 		this.binaryDir = join(pluginDir, "native");
+		this.nodePtyDir = join(this.binaryDir, "node-pty");
 		this.manifestPath = join(this.binaryDir, "manifest.json");
 		this.platformKey = `${process.platform}_${process.arch}`;
 	}
@@ -106,11 +110,13 @@ export class NativeBinaryManager {
 	/**
 	 * Get current binary status
 	 *
-	 * Simplified detection: only check if required files exist.
-	 * If ABI doesn't match, loading will fail at runtime with a clear error.
+	 * Check if complete node-pty structure exists:
+	 * - native/node-pty/package.json
+	 * - native/node-pty/lib/index.js
+	 * - native/node-pty/build/Release/*.node
 	 */
 	getStatus(): BinaryStatus {
-		const requiredFiles = PLATFORM_BINARIES[this.platformKey] || [];
+		const requiredBinaries = PLATFORM_BINARIES[this.platformKey] || [];
 		const existingFiles: string[] = [];
 		let manifest: BinaryManifest | null = null;
 
@@ -123,26 +129,33 @@ export class NativeBinaryManager {
 			}
 		}
 
-		// Check each required file
-		for (const file of requiredFiles) {
-			const filePath = join(this.binaryDir, file);
+		// Check for complete node-pty structure
+		const hasPackageJson = existsSync(
+			join(this.nodePtyDir, "package.json"),
+		);
+		const hasIndexJs = existsSync(join(this.nodePtyDir, "lib", "index.js"));
+
+		// Check each required binary in build/Release
+		for (const file of requiredBinaries) {
+			const filePath = join(this.nodePtyDir, "build", "Release", file);
 			if (existsSync(filePath)) {
 				existingFiles.push(file);
 			}
 		}
 
-		// Only check if files exist, don't require manifest for installation status
-		const allFilesExist =
-			requiredFiles.length > 0 &&
-			requiredFiles.every((f) => existingFiles.includes(f));
+		const allBinariesExist =
+			requiredBinaries.length > 0 &&
+			requiredBinaries.every((f) => existingFiles.includes(f));
+
+		const installed = hasPackageJson && hasIndexJs && allBinariesExist;
 
 		return {
-			installed: allFilesExist,
+			installed,
 			version: manifest?.version,
 			electronVersion: manifest?.electronVersion,
 			nodeABI: manifest?.nodeABI,
 			files: existingFiles,
-			needsUpdate: !allFilesExist,
+			needsUpdate: !installed,
 			platformKey: this.platformKey,
 			platformSupported: isPlatformSupported(),
 		};
@@ -167,7 +180,14 @@ export class NativeBinaryManager {
 	 * Get path to a specific binary file
 	 */
 	getBinaryPath(fileName: string): string {
-		return join(this.binaryDir, fileName);
+		return join(this.nodePtyDir, "build", "Release", fileName);
+	}
+
+	/**
+	 * Get path to node-pty directory
+	 */
+	getNodePtyDir(): string {
+		return this.nodePtyDir;
 	}
 
 	/**
@@ -183,7 +203,7 @@ export class NativeBinaryManager {
 			method: "GET",
 			headers: {
 				Accept: "application/vnd.github.v3+json",
-				"User-Agent": "Obsidian-Terminal-Plugin",
+				"User-Agent": "Obsidian-Terminal",
 			},
 		});
 
@@ -271,24 +291,46 @@ export class NativeBinaryManager {
 				percent: 50,
 			});
 
-			// Ensure directory exists
-			if (!existsSync(this.binaryDir)) {
-				mkdirSync(this.binaryDir, { recursive: true });
+			// Clean up existing node-pty directory
+			if (existsSync(this.nodePtyDir)) {
+				rmSync(this.nodePtyDir, { recursive: true, force: true });
 			}
 
-			// Extract ZIP
-			const zipBuffer = Buffer.from(bundleResponse.arrayBuffer);
-			await this.extractZip(zipBuffer, this.binaryDir, this.platformKey);
+			// Ensure directories exist
+			mkdirSync(join(this.nodePtyDir, "build", "Release"), {
+				recursive: true,
+			});
+			mkdirSync(join(this.nodePtyDir, "lib"), { recursive: true });
 
-			// Verify files based on platform configuration
-			const expectedFiles = PLATFORM_BINARIES[this.platformKey] || [];
+			// Extract ZIP (complete node-pty structure)
+			const zipBuffer = Buffer.from(bundleResponse.arrayBuffer);
+			await this.extractNodePtyZip(zipBuffer, this.platformKey);
+
+			// Verify structure
+			const expectedBinaries = PLATFORM_BINARIES[this.platformKey] || [];
 			const extractedFiles: Array<{ name: string; size: number }> = [];
 			const missingFiles: string[] = [];
 
-			for (const file of expectedFiles) {
-				const filePath = join(this.binaryDir, file);
+			// Check package.json
+			if (!existsSync(join(this.nodePtyDir, "package.json"))) {
+				missingFiles.push("package.json");
+			}
+
+			// Check lib/index.js
+			if (!existsSync(join(this.nodePtyDir, "lib", "index.js"))) {
+				missingFiles.push("lib/index.js");
+			}
+
+			// Check binaries
+			for (const file of expectedBinaries) {
+				const filePath = join(
+					this.nodePtyDir,
+					"build",
+					"Release",
+					file,
+				);
 				if (!existsSync(filePath)) {
-					missingFiles.push(file);
+					missingFiles.push(`build/Release/${file}`);
 				} else {
 					const stat = statSync(filePath);
 					extractedFiles.push({ name: file, size: stat.size });
@@ -324,39 +366,45 @@ export class NativeBinaryManager {
 	}
 
 	/**
-	 * Extract ZIP file (platform-specific folder)
+	 * Extract ZIP file containing complete node-pty structure
+	 *
+	 * ZIP structure:
+	 *   win32_x64/node-pty/package.json
+	 *   win32_x64/node-pty/lib/*.js
+	 *   win32_x64/node-pty/build/Release/*.node
 	 */
-	private async extractZip(
+	private async extractNodePtyZip(
 		buffer: Buffer,
-		destDir: string,
 		platformKey: string,
 	): Promise<void> {
 		const files = await this.parseZip(buffer);
-		const platformPrefix = `${platformKey}/`;
+		const platformPrefix = `${platformKey}/node-pty/`;
 
 		for (const [path, entry] of Object.entries(files)) {
 			// Skip directories
 			if (entry.dir) continue;
 
-			let targetName: string;
-			if (path.startsWith(platformPrefix)) {
-				// File in platform folder: extract to root
-				targetName = path.substring(platformPrefix.length);
-			} else if (!path.includes("/")) {
-				// Root level file
-				continue;
-			} else {
-				// Skip files from other platforms
+			// Only extract files from our platform's node-pty folder
+			if (!path.startsWith(platformPrefix)) {
 				continue;
 			}
 
-			if (!targetName) continue;
+			// Get relative path within node-pty
+			const relativePath = path.substring(platformPrefix.length);
+			if (!relativePath) continue;
 
 			const content = await entry.getData();
-			const targetPath = join(destDir, targetName);
+			const targetPath = join(this.nodePtyDir, relativePath);
+
+			// Ensure parent directory exists
+			const parentDir = dirname(targetPath);
+			if (!existsSync(parentDir)) {
+				mkdirSync(parentDir, { recursive: true });
+			}
+
 			writeFileSync(targetPath, content);
 			console.log(
-				`📄 Extracted: ${targetName} (${Math.round(content.length / 1024)} KB)`,
+				`📄 Extracted: ${relativePath} (${Math.round(content.length / 1024)} KB)`,
 			);
 		}
 	}
@@ -471,17 +519,13 @@ export class NativeBinaryManager {
 	 * Clean up binary files
 	 */
 	cleanup(): void {
-		const requiredFiles = PLATFORM_BINARIES[this.platformKey] || [];
-
-		for (const file of requiredFiles) {
-			const filePath = join(this.binaryDir, file);
-			if (existsSync(filePath)) {
-				try {
-					unlinkSync(filePath);
-					console.log(`🗑️ Removed: ${file}`);
-				} catch (error) {
-					console.warn(`Failed to remove ${file}:`, error);
-				}
+		// Remove entire node-pty directory
+		if (existsSync(this.nodePtyDir)) {
+			try {
+				rmSync(this.nodePtyDir, { recursive: true, force: true });
+				console.log("🗑️ Removed: node-pty directory");
+			} catch (error) {
+				console.warn("Failed to remove node-pty directory:", error);
 			}
 		}
 

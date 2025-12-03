@@ -23,6 +23,7 @@ export const MODULE_INFO = {
 
 /**
  * Required binary files per platform
+ * Note: conpty_console_list.node is optional on Windows (only needed for specific ConPTY features)
  */
 export const PLATFORM_BINARIES: Record<string, string[]> = {
 	win32_x64: ["pty.node", "conpty.node"],

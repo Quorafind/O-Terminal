@@ -179,10 +179,16 @@ export class ElectronBridge extends BaseElectronBridge {
 			);
 		}
 
-		// Load node-pty from plugin's node_modules
+		// Load node-pty: first try native/ (downloaded), then node_modules/ (dev)
 		const path = this.requireModule("path");
+		const fs = this.requireModule("fs");
 		const pluginDir = this._pluginDirectory || process.cwd();
-		const nodePtyPath = path.join(pluginDir, "node_modules", "node-pty");
+
+		let nodePtyPath = path.join(pluginDir, "native", "node-pty");
+		if (!fs.existsSync(nodePtyPath)) {
+			// Fallback to node_modules for development
+			nodePtyPath = path.join(pluginDir, "node_modules", "node-pty");
+		}
 
 		console.log("🔍 Loading node-pty from:", nodePtyPath);
 

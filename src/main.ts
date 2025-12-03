@@ -1,4 +1,11 @@
-import { Plugin, WorkspaceLeaf, Notice, normalizePath } from "obsidian";
+import {
+	Plugin,
+	WorkspaceLeaf,
+	Notice,
+	normalizePath,
+	Platform,
+	Menu,
+} from "obsidian";
 import {
 	ITerminalPlugin,
 	TerminalPluginError,
@@ -182,15 +189,18 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 
 	/**
 	 * Open a new terminal view
+	 * @param asTab If true, opens in a new tab instead of split
 	 */
-	async openTerminal(): Promise<void> {
+	async openTerminal(asTab = false): Promise<void> {
 		try {
 			// Create a new terminal session
 			const session =
 				await this.terminalManager.createTerminalWithAvailableShell();
 
-			// Create the view
-			const leaf = this.getOrCreateTerminalLeaf();
+			// Create the view - use tab or split based on parameter
+			const leaf = asTab
+				? this.app.workspace.getLeaf(true)
+				: this.getOrCreateTerminalLeaf();
 			const view = new TerminalView(leaf, session, this);
 
 			// Set the view
@@ -371,6 +381,57 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 				}
 			}),
 		);
+
+		// Intercept "New Tab" button clicks to show menu (Desktop only)
+		if (Platform.isDesktop) {
+			this.registerDomEvent(
+				window,
+				"click",
+				(evt: MouseEvent) => this.handleNewTabClick(evt),
+				{ capture: true },
+			);
+		}
+	}
+
+	/**
+	 * Intercept clicks on "New Tab" button to show context menu with terminal option
+	 * Uses event capturing to intercept before Obsidian's default handler
+	 */
+	private handleNewTabClick(evt: MouseEvent): void {
+		const target = evt.target as HTMLElement;
+		const newTabBtn = target.closest(".workspace-tab-header-new-tab");
+
+		if (!newTabBtn) {
+			return;
+		}
+
+		// Prevent default behavior and stop propagation
+		evt.preventDefault();
+		evt.stopPropagation();
+
+		const menu = new Menu();
+
+		// Option 1: Default Obsidian New Tab behavior
+		menu.addItem((item) => {
+			item.setTitle("New Tab")
+				.setIcon("file-plus")
+				.onClick(() => {
+					this.app.workspace.getLeaf(true);
+				});
+		});
+
+		// Option 2: Open Terminal (only if native modules are ready)
+		if (this._nativeModulesReady) {
+			menu.addItem((item) => {
+				item.setTitle("New Terminal")
+					.setIcon("terminal")
+					.onClick(() => {
+						this.openTerminal(true);
+					});
+			});
+		}
+
+		menu.showAtMouseEvent(evt);
 	}
 
 	/**
@@ -401,19 +462,8 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 	 * Get or create a terminal leaf
 	 */
 	private getOrCreateTerminalLeaf(): WorkspaceLeaf {
-		// Try to find an existing terminal leaf
-		const existingLeaf =
-			this.app.workspace.getLeavesOfType(VIEW_TYPE_TERMINAL)[0];
-
-		if (existingLeaf) {
-			return existingLeaf;
-		}
-
 		// Create a new leaf in the right split
-		return (
-			this.app.workspace.getRightLeaf(false) ||
-			this.app.workspace.getLeaf(true)
-		);
+		return this.app.workspace.getLeaf("split", "horizontal");
 	}
 
 	/**
