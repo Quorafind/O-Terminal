@@ -43,22 +43,7 @@ export class PTYManager extends BasePTYManager {
 	 */
 	createPTY(options: PTYOptions): IPty {
 		try {
-			console.log("📦 PTYManager.createPTY called with options:", {
-				shell: options.shell,
-				cwd: options.cwd,
-				cols: options.cols,
-				rows: options.rows,
-			});
-
 			const nodePty = this.electronBridge.getNodePTY();
-			console.log(
-				"📦 getNodePTY result:",
-				nodePty ? "available" : "null",
-			);
-			console.log(
-				"📦 PTY load mode:",
-				this.electronBridge.getPtyLoadMode(),
-			);
 
 			if (!nodePty) {
 				throw new TerminalPluginError(
@@ -68,42 +53,16 @@ export class PTYManager extends BasePTYManager {
 			}
 
 			// Validate shell exists before creating PTY
-			const shellExists = this.validateShellPath(options.shell);
-			console.log(
-				"📦 Shell validation:",
-				options.shell,
-				"exists:",
-				shellExists,
-			);
-
-			if (!shellExists) {
+			if (!this.validateShellPath(options.shell)) {
 				throw new TerminalPluginError(
 					TerminalErrorType.SHELL_NOT_FOUND,
 					`Shell not found: ${options.shell}`,
 				);
 			}
 
-			// Validate cwd exists
-			const fs = require("fs");
-			const cwdExists = fs.existsSync(options.cwd);
-			console.log(
-				"📦 CWD validation:",
-				options.cwd,
-				"exists:",
-				cwdExists,
-			);
-
-			if (!cwdExists) {
-				console.warn("⚠️ CWD does not exist, falling back to HOME");
-				options.cwd = process.env.HOME || "/";
-			}
-
-			// Log environment info for debugging
-			console.log(
-				"📦 Environment PATH:",
-				options.env?.PATH?.substring(0, 100) + "...",
-			);
-			console.log("📦 Environment HOME:", options.env?.HOME);
+			// Validate cwd with proper permission checks (R_OK + X_OK)
+			// This is crucial for posix_spawn which requires directory execute permission
+			options.cwd = this.validateAndResolveCwd(options.cwd);
 
 			// Platform detection for spawn options
 			const proc = this.electronBridge.getProcess();
@@ -127,17 +86,26 @@ export class PTYManager extends BasePTYManager {
 				spawnOptions.useConpty = true;
 			}
 
+			// Sanitize environment variables - ensure all values are strings
+			if (options.env) {
+				const envKeys = Object.keys(options.env);
+				for (const key of envKeys) {
+					const val = options.env[key];
+					if (typeof val !== "string") {
+						options.env[key] =
+							val === undefined || val === null
+								? ""
+								: String(val);
+					}
+				}
+			}
+
 			// Create PTY process
-			console.log(
-				`📦 Calling nodePty.spawn (ConPTY: ${isWindows ? "enabled" : "N/A"})...`,
-			);
 			const pty = nodePty.spawn(
 				options.shell,
 				options.args || [],
 				spawnOptions,
 			) as IPty;
-
-			console.log(`✅ PTY spawned successfully, pid: ${pty.pid}`);
 
 			// Track the PTY process
 			this.activePTYs.add(pty);
@@ -157,32 +125,7 @@ export class PTYManager extends BasePTYManager {
 
 			return pty;
 		} catch (error) {
-			// 详细记录原始错误
-			console.error("❌ PTY creation failed:", error);
-			console.error("❌ Error name:", (error as Error)?.name);
-			console.error("❌ Error message:", (error as Error)?.message);
-			console.error("❌ Error stack:", (error as Error)?.stack);
-
-			// Provide hints for common errors
-			const errorMsg = (error as Error)?.message || "";
-			if (errorMsg.includes("posix_spawnp")) {
-				console.error(
-					"💡 Hint: posix_spawnp failed - possible causes:",
-				);
-				console.error(
-					"   1. Shell path invalid or lacks execution permissions",
-				);
-				console.error(
-					"   2. node-pty native module ABI mismatch with Electron version",
-				);
-				console.error(
-					"   3. Architecture mismatch (e.g., x64 vs arm64 on Apple Silicon)",
-				);
-				console.error(`💡 Tried shell: ${options.shell}`);
-				console.error(
-					"💡 Try reinstalling native modules via Settings → Terminal → Download Native Modules",
-				);
-			}
+			console.error("PTY creation failed:", error);
 
 			if (error instanceof TerminalPluginError) {
 				throw error;
@@ -406,5 +349,50 @@ export class PTYManager extends BasePTYManager {
 
 		// Return default if no alternatives work
 		return this.getDefaultShell();
+	}
+
+	/**
+	 * Validate and resolve the current working directory
+	 * Ensures the directory exists and has proper permissions (R_OK + X_OK)
+	 * Falls back to HOME directory if validation fails
+	 *
+	 * @param cwd - The desired working directory
+	 * @returns A valid working directory path
+	 */
+	private validateAndResolveCwd(cwd: string): string {
+		const fs = require("fs");
+
+		try {
+			// First check if path exists
+			if (!fs.existsSync(cwd)) {
+				throw new Error("Path does not exist");
+			}
+
+			// Check for Read and Execute permissions
+			// R_OK: Readable, X_OK: Executable/Searchable (needed to enter directory)
+			// This is crucial for posix_spawn which requires directory execute permission
+			fs.accessSync(cwd, fs.constants.R_OK | fs.constants.X_OK);
+			return cwd;
+		} catch (cwdError) {
+			const errorMsg =
+				cwdError instanceof Error ? cwdError.message : String(cwdError);
+			console.warn(`CWD validation failed for "${cwd}": ${errorMsg}`);
+
+			// Fall back to HOME directory
+			const home = process.env.HOME || process.env.USERPROFILE || "/";
+
+			// Validate HOME as well
+			try {
+				fs.accessSync(home, fs.constants.R_OK | fs.constants.X_OK);
+				return home;
+			} catch {
+				// Last resort: use root or temp directory
+				const fallback =
+					process.platform === "win32"
+						? process.env.TEMP || "C:\\"
+						: "/tmp";
+				return fallback;
+			}
+		}
 	}
 }

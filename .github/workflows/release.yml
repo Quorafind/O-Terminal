@@ -114,8 +114,17 @@ jobs:
                   # Copy JS files (lib directory)
                   cp -r node_modules/node-pty/lib/* bundle/node-pty/lib/
 
-                  # Copy native binaries
+                  # Copy native binaries (.node files)
                   cp node_modules/node-pty/build/Release/*.node bundle/node-pty/build/Release/
+
+                  # Copy spawn-helper executable (required for macOS)
+                  # spawn-helper is a standalone executable without extension that node-pty
+                  # uses on macOS to spawn processes with proper PTY handling
+                  if [ -f "node_modules/node-pty/build/Release/spawn-helper" ]; then
+                    cp node_modules/node-pty/build/Release/spawn-helper bundle/node-pty/build/Release/
+                    chmod +x bundle/node-pty/build/Release/spawn-helper
+                    echo "✅ Copied spawn-helper for macOS"
+                  fi
 
                   echo "=== Bundle structure ==="
                   find bundle -type f | head -20

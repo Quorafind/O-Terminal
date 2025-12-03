@@ -24,11 +24,12 @@ export const MODULE_INFO = {
 /**
  * Required binary files per platform
  * Note: conpty_console_list.node is optional on Windows (only needed for specific ConPTY features)
+ * Note: spawn-helper is required on macOS for node-pty@1.0.0+ to create PTY processes
  */
 export const PLATFORM_BINARIES: Record<string, string[]> = {
 	win32_x64: ["pty.node", "conpty.node"],
-	darwin_x64: ["pty.node"],
-	darwin_arm64: ["pty.node"],
+	darwin_x64: ["pty.node", "spawn-helper"],
+	darwin_arm64: ["pty.node", "spawn-helper"],
 	linux_x64: ["pty.node"],
 };
 

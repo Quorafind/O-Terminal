@@ -77,11 +77,14 @@ function copyBuildDirectory(srcDir, destDir) {
 		const files = readdirSync(srcReleaseDir);
 		for (const file of files) {
 			// Copy .node, .dll, and .exe files for both ConPTY and WinPTY support
-			if (
+			// Also copy spawn-helper (macOS executable without extension)
+			const shouldCopy =
 				file.endsWith(".node") ||
 				file.endsWith(".dll") ||
-				file.endsWith(".exe")
-			) {
+				file.endsWith(".exe") ||
+				file === "spawn-helper"; // macOS PTY spawn helper executable
+
+			if (shouldCopy) {
 				const srcFile = join(srcReleaseDir, file);
 				const destFile = join(destReleaseDir, file);
 				copyFileSync(srcFile, destFile);
@@ -102,11 +105,14 @@ function copyBuildDirectory(srcDir, destDir) {
 		const files = readdirSync(srcDebugDir);
 		for (const file of files) {
 			// Copy .node, .dll, and .exe files for both ConPTY and WinPTY support
-			if (
+			// Also copy spawn-helper (macOS executable without extension)
+			const shouldCopy =
 				file.endsWith(".node") ||
 				file.endsWith(".dll") ||
-				file.endsWith(".exe")
-			) {
+				file.endsWith(".exe") ||
+				file === "spawn-helper"; // macOS PTY spawn helper executable
+
+			if (shouldCopy) {
 				const srcFile = join(srcDebugDir, file);
 				const destFile = join(destDebugDir, file);
 				copyFileSync(srcFile, destFile);
