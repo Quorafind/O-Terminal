@@ -509,13 +509,45 @@ export class TerminalSettingsTab extends PluginSettingTab {
 		// Container for the Custom Shell Input (to toggle visibility)
 		const customShellContainer = containerEl.createDiv();
 		let customShellText: any;
+		let currentDropdownValue = selectedOption;
 
-		// 1. Shell Preset Dropdown
+		// 1. Shell Preset Dropdown with Test Button
 		new Setting(containerEl)
 			.setName("Default Shell")
 			.setDesc(
 				"Select a detected shell or choose 'Custom' to enter a path manually.",
 			)
+			.addExtraButton((btn) => {
+				btn.setIcon("play")
+					.setTooltip("Test if this shell is valid")
+					.onClick(async () => {
+						const shellToTest =
+							currentDropdownValue === "default"
+								? (this.plugin.ptyManager?.getDefaultShell() ??
+									"")
+								: currentDropdownValue === "custom"
+									? (this.plugin.settings?.defaultShell ?? "")
+									: currentDropdownValue;
+
+						if (!shellToTest) {
+							new Notice("No shell selected to test");
+							return;
+						}
+
+						const isValid =
+							this.plugin.ptyManager?.validateShellPath(
+								shellToTest,
+							) ?? false;
+
+						if (isValid) {
+							new Notice(`✓ Shell is valid: ${shellToTest}`);
+						} else {
+							new Notice(
+								`✗ Shell not found or not executable: ${shellToTest}`,
+							);
+						}
+					});
+			})
 			.addDropdown((dropdown) => {
 				dropdown.addOption("default", "System Default");
 				alternatives.forEach((shell) => {
@@ -528,6 +560,8 @@ export class TerminalSettingsTab extends PluginSettingTab {
 				dropdown.setValue(selectedOption);
 
 				dropdown.onChange(async (value) => {
+					currentDropdownValue = value;
+
 					if (value === "custom") {
 						customShellContainer.style.display = "block";
 					} else {

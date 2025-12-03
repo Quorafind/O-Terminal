@@ -9,16 +9,33 @@ import { ElectronBridge } from "./electron-bridge";
 import { DEFAULT_TERMINAL_DIMENSIONS } from "@/constants";
 
 /**
+ * Settings provider interface for PTYManager
+ */
+export interface PTYSettingsProvider {
+	defaultShell: string;
+	shellArgs: string[];
+}
+
+/**
  * PTY manager implementation for managing pseudo-terminal processes
  * Handles PTY creation, destruction, and configuration
  */
 export class PTYManager extends BasePTYManager {
 	private electronBridge: ElectronBridge;
 	private activePTYs: Set<IPty> = new Set();
+	private settingsProvider: (() => PTYSettingsProvider | null) | null = null;
 
 	constructor(electronBridge: ElectronBridge) {
 		super();
 		this.electronBridge = electronBridge;
+	}
+
+	/**
+	 * Set settings provider callback
+	 * This allows PTYManager to access user settings for shell configuration
+	 */
+	setSettingsProvider(provider: () => PTYSettingsProvider | null): void {
+		this.settingsProvider = provider;
 	}
 
 	/**
@@ -66,23 +83,61 @@ export class PTYManager extends BasePTYManager {
 				);
 			}
 
-			// Create PTY process with UTF-8 support
-			// ConPTY (Windows Pseudo Console) is required for proper emoji rendering
-			// WinPTY does not support emoji/wide characters correctly
-			const pty = nodePty.spawn(options.shell, options.args, {
+			// Validate cwd exists
+			const fs = require("fs");
+			const cwdExists = fs.existsSync(options.cwd);
+			console.log(
+				"📦 CWD validation:",
+				options.cwd,
+				"exists:",
+				cwdExists,
+			);
+
+			if (!cwdExists) {
+				console.warn("⚠️ CWD does not exist, falling back to HOME");
+				options.cwd = process.env.HOME || "/";
+			}
+
+			// Log environment info for debugging
+			console.log(
+				"📦 Environment PATH:",
+				options.env?.PATH?.substring(0, 100) + "...",
+			);
+			console.log("📦 Environment HOME:", options.env?.HOME);
+
+			// Platform detection for spawn options
+			const proc = this.electronBridge.getProcess();
+			const isWindows = proc.platform === "win32";
+
+			// Build spawn options - useConpty is Windows-only!
+			// Using useConpty on macOS/Linux can cause posix_spawnp failures
+			const spawnOptions: Record<string, unknown> = {
 				name: "xterm-256color",
 				cols: options.cols,
 				rows: options.rows,
 				cwd: options.cwd,
 				env: options.env,
 				encoding: "utf8",
-				useConpty: true, // Enable ConPTY for native UTF-8 and emoji support
-			}) as IPty;
+			};
 
+			// Only enable ConPTY on Windows for proper emoji/UTF-8 support
+			// ConPTY (Windows Pseudo Console) is required for proper emoji rendering on Windows
+			// WinPTY does not support emoji/wide characters correctly
+			if (isWindows) {
+				spawnOptions.useConpty = true;
+			}
+
+			// Create PTY process
 			console.log(
-				"✅ PTY spawned successfully (ConPTY enabled), pid:",
-				pty.pid,
+				`📦 Calling nodePty.spawn (ConPTY: ${isWindows ? "enabled" : "N/A"})...`,
 			);
+			const pty = nodePty.spawn(
+				options.shell,
+				options.args || [],
+				spawnOptions,
+			) as IPty;
+
+			console.log(`✅ PTY spawned successfully, pid: ${pty.pid}`);
 
 			// Track the PTY process
 			this.activePTYs.add(pty);
@@ -112,12 +167,20 @@ export class PTYManager extends BasePTYManager {
 			const errorMsg = (error as Error)?.message || "";
 			if (errorMsg.includes("posix_spawnp")) {
 				console.error(
-					"💡 Hint: posix_spawnp failed usually means the shell path is invalid or lacks execution permissions.",
+					"💡 Hint: posix_spawnp failed - possible causes:",
 				);
 				console.error(
-					"💡 Tried shell:",
-					options.shell,
-					"- Please verify this path exists and is executable.",
+					"   1. Shell path invalid or lacks execution permissions",
+				);
+				console.error(
+					"   2. node-pty native module ABI mismatch with Electron version",
+				);
+				console.error(
+					"   3. Architecture mismatch (e.g., x64 vs arm64 on Apple Silicon)",
+				);
+				console.error(`💡 Tried shell: ${options.shell}`);
+				console.error(
+					"💡 Try reinstalling native modules via Settings → Terminal → Download Native Modules",
 				);
 			}
 
@@ -164,8 +227,33 @@ export class PTYManager extends BasePTYManager {
 
 	/**
 	 * Get default shell for current platform
+	 * Prioritizes user settings over system defaults, with fallback if invalid
 	 */
 	getDefaultShell(): string {
+		// First, check user settings
+		if (this.settingsProvider) {
+			const settings = this.settingsProvider();
+			if (settings?.defaultShell) {
+				// Validate the user-configured shell exists
+				if (
+					this.electronBridge.validateShellSync(settings.defaultShell)
+				) {
+					return settings.defaultShell;
+				}
+				console.warn(
+					`Configured shell "${settings.defaultShell}" is invalid, falling back to system default`,
+				);
+			}
+		}
+
+		// Fall back to system default
+		return this.getSystemDefaultShell();
+	}
+
+	/**
+	 * Get system default shell (without user settings)
+	 */
+	private getSystemDefaultShell(): string {
 		try {
 			return this.electronBridge.getDefaultShell();
 		} catch (error) {
@@ -175,7 +263,7 @@ export class PTYManager extends BasePTYManager {
 				case "win32":
 					return "cmd.exe";
 				case "darwin":
-					return "/bin/bash";
+					return "/bin/zsh";
 				case "linux":
 					return "/bin/bash";
 				default:
@@ -206,9 +294,13 @@ export class PTYManager extends BasePTYManager {
 			utf8Env.PYTHONIOENCODING = "utf-8";
 		}
 
+		// Get shell args from settings if available
+		const settings = this.settingsProvider?.();
+		const shellArgs = settings?.shellArgs ?? [];
+
 		return {
 			shell: this.getDefaultShell(),
-			args: [],
+			args: shellArgs,
 			cwd: this.electronBridge.getCurrentWorkingDirectory(),
 			env: utf8Env,
 			cols: DEFAULT_TERMINAL_DIMENSIONS.cols,
@@ -250,7 +342,7 @@ export class PTYManager extends BasePTYManager {
 	/**
 	 * Validate if shell path exists and is executable
 	 */
-	private validateShellPath(shellPath: string): boolean {
+	validateShellPath(shellPath: string): boolean {
 		try {
 			return this.electronBridge.validateShellSync(shellPath);
 		} catch (error) {

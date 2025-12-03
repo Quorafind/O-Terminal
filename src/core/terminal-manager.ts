@@ -32,7 +32,7 @@ export class TerminalManager extends BaseTerminalManager {
 			if (this.terminals.has(sessionId)) {
 				throw new TerminalPluginError(
 					TerminalErrorType.VIEW_CREATION_FAILED,
-					`Terminal with ID ${sessionId} already exists`
+					`Terminal with ID ${sessionId} already exists`,
 				);
 			}
 
@@ -66,7 +66,7 @@ export class TerminalManager extends BaseTerminalManager {
 				TerminalErrorType.VIEW_CREATION_FAILED,
 				"Failed to create terminal session",
 				error as Error,
-				{ id }
+				{ id },
 			);
 		}
 	}
@@ -98,7 +98,10 @@ export class TerminalManager extends BaseTerminalManager {
 					// The view will handle its own cleanup
 					session.view = undefined;
 				} catch (error) {
-					console.warn(`Failed to cleanup view for session ${id}:`, error);
+					console.warn(
+						`Failed to cleanup view for session ${id}:`,
+						error,
+					);
 				}
 			}
 
@@ -111,7 +114,7 @@ export class TerminalManager extends BaseTerminalManager {
 				TerminalErrorType.VIEW_CREATION_FAILED,
 				`Failed to destroy terminal session: ${id}`,
 				error as Error,
-				{ id }
+				{ id },
 			);
 		}
 	}
@@ -127,7 +130,9 @@ export class TerminalManager extends BaseTerminalManager {
 	 * Get all active terminal sessions
 	 */
 	getActiveTerminals(): TerminalSession[] {
-		return Array.from(this.terminals.values()).filter(session => session.isActive);
+		return Array.from(this.terminals.values()).filter(
+			(session) => session.isActive,
+		);
 	}
 
 	/**
@@ -157,13 +162,16 @@ export class TerminalManager extends BaseTerminalManager {
 	cleanup(): void {
 		try {
 			const sessionIds = Array.from(this.terminals.keys());
-			
+
 			// Destroy all sessions
-			sessionIds.forEach(id => {
+			sessionIds.forEach((id) => {
 				try {
 					this.destroyTerminal(id);
 				} catch (error) {
-					console.warn(`Failed to cleanup terminal session ${id}:`, error);
+					console.warn(
+						`Failed to cleanup terminal session ${id}:`,
+						error,
+					);
 				}
 			});
 
@@ -178,7 +186,7 @@ export class TerminalManager extends BaseTerminalManager {
 			throw new TerminalPluginError(
 				TerminalErrorType.VIEW_CREATION_FAILED,
 				"Failed to cleanup terminal manager",
-				error as Error
+				error as Error,
 			);
 		}
 	}
@@ -191,7 +199,7 @@ export class TerminalManager extends BaseTerminalManager {
 		if (!existingSession) {
 			throw new TerminalPluginError(
 				TerminalErrorType.VIEW_CREATION_FAILED,
-				`Terminal session ${id} not found`
+				`Terminal session ${id} not found`,
 			);
 		}
 
@@ -216,7 +224,7 @@ export class TerminalManager extends BaseTerminalManager {
 	 * Resize all active terminals
 	 */
 	resizeAllTerminals(cols: number, rows: number): void {
-		this.getActiveTerminals().forEach(session => {
+		this.getActiveTerminals().forEach((session) => {
 			try {
 				session.ptyProcess.resize(cols, rows);
 			} catch (error) {
@@ -242,14 +250,19 @@ export class TerminalManager extends BaseTerminalManager {
 
 		// Handle PTY process exit
 		ptyProcess.on("exit", (exitCode: number, signal?: number) => {
-			console.log(`PTY process for session ${id} exited with code ${exitCode}, signal ${signal}`);
-			
+			console.log(
+				`PTY process for session ${id} exited with code ${exitCode}, signal ${signal}`,
+			);
+
 			// Mark session as inactive but don't destroy it yet
 			// This allows the user to see the exit message and restart if needed
 			session.isActive = false;
-			
+
 			// Notify view if it exists
-			if (session.view && typeof (session.view as any).onPTYExit === 'function') {
+			if (
+				session.view &&
+				typeof (session.view as any).onPTYExit === "function"
+			) {
 				(session.view as any).onPTYExit(exitCode, signal);
 			}
 		});
@@ -257,12 +270,15 @@ export class TerminalManager extends BaseTerminalManager {
 		// Handle PTY process errors
 		ptyProcess.on("error", (error: Error) => {
 			console.error(`PTY process error for session ${id}:`, error);
-			
+
 			// Mark session as inactive
 			session.isActive = false;
-			
+
 			// Notify view if it exists
-			if (session.view && typeof (session.view as any).onPTYError === 'function') {
+			if (
+				session.view &&
+				typeof (session.view as any).onPTYError === "function"
+			) {
 				(session.view as any).onPTYError(error);
 			}
 		});
@@ -276,55 +292,119 @@ export class TerminalManager extends BaseTerminalManager {
 
 	/**
 	 * Find available shell and create terminal with it
+	 * On macOS, includes retry logic and shell fallback for posix_spawnp issues
 	 */
-	async createTerminalWithAvailableShell(id?: string): Promise<TerminalSession> {
-		try {
-			// Generate unique ID if not provided
-			const sessionId = id || this.generateSessionId();
+	async createTerminalWithAvailableShell(
+		id?: string,
+	): Promise<TerminalSession> {
+		// Generate unique ID if not provided
+		const sessionId = id || this.generateSessionId();
 
-			// Check if terminal with this ID already exists
-			if (this.terminals.has(sessionId)) {
-				throw new TerminalPluginError(
-					TerminalErrorType.VIEW_CREATION_FAILED,
-					`Terminal with ID ${sessionId} already exists`
-				);
-			}
-
-			// Try to find an available shell
-			const availableShell = await this.ptyManager.findAvailableShell();
-			
-			// Get PTY options with the available shell
-			const ptyOptions = this.ptyManager.getDefaultOptions();
-			ptyOptions.shell = availableShell;
-
-			// Create PTY process with the available shell
-			const ptyProcess = this.ptyManager.createPTY(ptyOptions);
-
-			// Create terminal session
-			const session: TerminalSession = {
-				id: sessionId,
-				ptyProcess,
-				isActive: true,
-				view: undefined, // Will be set when view is created
-			};
-
-			// Store the session
-			this.terminals.set(sessionId, session);
-
-			// Set up PTY event handlers for session management
-			this.setupPTYEventHandlers(session);
-
-			return session;
-		} catch (error) {
-			if (error instanceof TerminalPluginError) {
-				throw error;
-			}
-			
+		// Check if terminal with this ID already exists
+		if (this.terminals.has(sessionId)) {
 			throw new TerminalPluginError(
-				TerminalErrorType.PTY_CREATION_FAILED,
-				"Failed to create terminal with available shell",
-				error as Error
+				TerminalErrorType.VIEW_CREATION_FAILED,
+				`Terminal with ID ${sessionId} already exists`,
 			);
 		}
+
+		const isMacOS = process.platform === "darwin";
+		const shellsToTry = await this.getShellsToTry();
+		let lastError: Error | null = null;
+
+		// On macOS, try multiple shells due to posix_spawnp issues with node-pty 1.0+
+		// System shells (/bin/zsh, /bin/bash) are more reliable than Homebrew shells
+		for (const shell of shellsToTry) {
+			// On macOS, add retry logic for transient posix_spawnp failures
+			const maxRetries = isMacOS ? 3 : 1;
+
+			for (let attempt = 1; attempt <= maxRetries; attempt++) {
+				try {
+					console.log(
+						`🔄 Attempting to spawn shell: ${shell} (attempt ${attempt}/${maxRetries})`,
+					);
+
+					const ptyOptions = this.ptyManager.getDefaultOptions();
+					ptyOptions.shell = shell;
+
+					// Create PTY process
+					const ptyProcess = this.ptyManager.createPTY(ptyOptions);
+
+					// Create terminal session
+					const session: TerminalSession = {
+						id: sessionId,
+						ptyProcess,
+						isActive: true,
+						view: undefined,
+					};
+
+					// Store the session
+					this.terminals.set(sessionId, session);
+
+					// Set up PTY event handlers
+					this.setupPTYEventHandlers(session);
+
+					console.log(`✅ Successfully spawned shell: ${shell}`);
+					return session;
+				} catch (error) {
+					lastError = error as Error;
+					const errorMsg = (error as Error)?.message || "";
+
+					console.warn(
+						`⚠️ Failed to spawn ${shell} (attempt ${attempt}): ${errorMsg}`,
+					);
+
+					// On macOS, if it's a posix_spawnp error, wait briefly before retry
+					if (isMacOS && errorMsg.includes("posix_spawnp")) {
+						if (attempt < maxRetries) {
+							console.log(
+								`⏳ Waiting 100ms before retry (posix_spawnp issue)...`,
+							);
+							await this.sleep(100);
+						}
+					} else {
+						// For non-posix_spawnp errors, don't retry, try next shell
+						break;
+					}
+				}
+			}
+		}
+
+		// All shells failed
+		throw new TerminalPluginError(
+			TerminalErrorType.PTY_CREATION_FAILED,
+			`Failed to create terminal. Tried shells: ${shellsToTry.join(", ")}. Last error: ${lastError?.message}`,
+			lastError || undefined,
+		);
+	}
+
+	/**
+	 * Get list of shells to try, prioritizing system shells on macOS
+	 */
+	private async getShellsToTry(): Promise<string[]> {
+		const alternatives = this.ptyManager.getAlternativeShells();
+		const preferredShell = await this.ptyManager.findAvailableShell();
+
+		// Build ordered list: preferred shell first, then alternatives
+		const shells: string[] = [];
+
+		if (preferredShell && !shells.includes(preferredShell)) {
+			shells.push(preferredShell);
+		}
+
+		for (const shell of alternatives) {
+			if (!shells.includes(shell)) {
+				shells.push(shell);
+			}
+		}
+
+		return shells;
+	}
+
+	/**
+	 * Sleep helper for retry delays
+	 */
+	private sleep(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 }

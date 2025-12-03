@@ -452,6 +452,22 @@ export class NativeBinaryManager {
 			percent: 20,
 		});
 
+		// Try to extract version from node-pty/package.json
+		let version = "local";
+		const packageJsonEntry = files["node-pty/package.json"];
+		if (packageJsonEntry && !packageJsonEntry.dir) {
+			try {
+				const content = await packageJsonEntry.getData();
+				const packageJson = JSON.parse(content.toString("utf8"));
+				if (packageJson.version) {
+					version = packageJson.version;
+					console.log(`📦 Detected version from package.json: ${version}`);
+				}
+			} catch (e) {
+				console.warn("Failed to parse package.json for version:", e);
+			}
+		}
+
 		// Clean up existing node-pty directory
 		if (existsSync(this.nodePtyDir)) {
 			rmSync(this.nodePtyDir, { recursive: true, force: true });
@@ -521,9 +537,9 @@ export class NativeBinaryManager {
 			);
 		}
 
-		// Write manifest
+		// Write manifest with extracted version
 		this.writeManifest(
-			"local",
+			version,
 			MODULE_INFO.electronVersion,
 			MODULE_INFO.nodeABI,
 			extractedFiles,

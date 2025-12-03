@@ -105,7 +105,7 @@ export class ElectronBridge extends BaseElectronBridge {
 			case "win32":
 				return "powershell.exe";
 			case "darwin":
-				return "/bin/zsh";
+				return "/bin/bash";
 			case "linux":
 				return "/bin/bash";
 			default:
@@ -130,6 +130,7 @@ export class ElectronBridge extends BaseElectronBridge {
 
 	/**
 	 * Get environment variables
+	 * Automatically fixes PATH on macOS/Linux to include common system paths
 	 */
 	getEnvironmentVariables(): Record<string, string> {
 		const proc = this.getProcess();
@@ -141,7 +142,50 @@ export class ElectronBridge extends BaseElectronBridge {
 			}
 		}
 
+		// Fix PATH for macOS/Linux GUI environment
+		// GUI apps often inherit a stripped-down PATH (e.g. /usr/bin:/bin)
+		if (proc.platform === "darwin" || proc.platform === "linux") {
+			this.fixPath(env);
+		}
+
 		return env;
+	}
+
+	/**
+	 * Manually fix PATH for GUI apps by prepending common system paths
+	 * macOS GUI apps don't inherit PATH from shell config files (.zshrc, .bashrc)
+	 */
+	private fixPath(env: Record<string, string>): void {
+		const currentPath = env.PATH || "";
+
+		// Common paths often missing in GUI apps
+		// Order matters: user installed binaries (homebrew) should take precedence
+		const candidates = [
+			"/opt/homebrew/bin", // Apple Silicon Homebrew
+			"/opt/homebrew/sbin",
+			"/usr/local/bin", // Intel Homebrew / user binaries
+			"/usr/local/sbin",
+			"/usr/bin",
+			"/bin",
+			"/usr/sbin",
+			"/sbin",
+		];
+
+		// Add user home bin directories if HOME is available
+		const home = env.HOME || process.env.HOME;
+		if (home) {
+			candidates.push(`${home}/.local/bin`);
+			candidates.push(`${home}/bin`);
+		}
+
+		const existing = new Set(currentPath.split(":"));
+		const toAdd = candidates.filter((p) => !existing.has(p));
+
+		if (toAdd.length > 0) {
+			// Prepend to ensure they are found first
+			env.PATH = toAdd.join(":") + (currentPath ? ":" + currentPath : "");
+			console.log("🔧 Fixed PATH for GUI environment");
+		}
 	}
 
 	/**

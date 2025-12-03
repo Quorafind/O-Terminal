@@ -264,6 +264,9 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 		// Initialize PTY manager
 		this.ptyManager = new PTYManager(this.electronBridge);
 
+		// Set settings provider so PTYManager can access user shell settings
+		this.ptyManager.setSettingsProvider(() => this.settings);
+
 		// Initialize terminal manager
 		this.terminalManager = new TerminalManager(this.ptyManager);
 	}
