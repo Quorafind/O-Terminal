@@ -384,3 +384,7 @@
 .terminal-settings::-webkit-scrollbar-thumb:hover {
 	background: var(--term-green);
 }
+
+.terminal-settings select:focus {
+	box-shadow: 0 0 0 2px var(--term-green);
+}

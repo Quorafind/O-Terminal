@@ -25,6 +25,17 @@ import {
 } from "@/core/native-binary-manager";
 import { isPlatformSupported, MODULE_INFO } from "@/core/embedded-modules";
 import { GHOSTTY_OPTIONS } from "@/constants";
+import { PRESET_THEMES, getDarkThemes, getLightThemes } from "@/core/themes";
+
+/**
+ * Terminal renderer type
+ */
+export type TerminalRenderer = "xterm" | "xterm-webgl" | "ghostty";
+
+/**
+ * Theme mode - system follows Obsidian CSS, preset uses predefined themes
+ */
+export type ThemeMode = "system" | "preset";
 
 /**
  * Plugin settings interface
@@ -38,8 +49,12 @@ export interface TerminalPluginSettings {
 	scrollback: number;
 	// Native binary settings
 	githubRepo: string;
-	// Experimental features
-	useGhostty: boolean;
+	// Renderer selection
+	renderer: TerminalRenderer;
+	// Theme settings
+	themeMode: ThemeMode;
+	darkThemePreset: string;
+	lightThemePreset: string;
 }
 
 /**
@@ -53,7 +68,11 @@ export const DEFAULT_SETTINGS: TerminalPluginSettings = {
 	cursorBlink: true,
 	scrollback: 1000,
 	githubRepo: "quorafind/obsidian-terminal",
-	useGhostty: false,
+	renderer: "xterm",
+	// Theme defaults
+	themeMode: "system",
+	darkThemePreset: "dracula",
+	lightThemePreset: "github-light",
 };
 
 /**
@@ -422,6 +441,11 @@ export class TerminalSettingsTab extends PluginSettingTab {
 	private displayAppearanceSection(containerEl: HTMLElement): void {
 		containerEl.createEl("h2", { text: "Appearance" });
 
+		// Theme Settings
+		this.displayThemeSettings(containerEl);
+
+		containerEl.createEl("h3", { text: "Font & Display" });
+
 		new Setting(containerEl)
 			.setName("Font Size")
 			.setDesc("Terminal font size in pixels")
@@ -492,6 +516,152 @@ export class TerminalSettingsTab extends PluginSettingTab {
 					});
 			});
 	}
+
+	/**
+	 * Display theme settings section
+	 */
+	private displayThemeSettings(containerEl: HTMLElement): void {
+		containerEl.createEl("h3", { text: "Theme" });
+
+		// Theme Mode selection
+		new Setting(containerEl)
+			.setName("Theme mode")
+			.setDesc(
+				"Follow Obsidian uses colors from your current Obsidian theme. " +
+					"Preset allows choosing specific terminal color schemes.",
+			)
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption("system", "Follow Obsidian")
+					.addOption("preset", "Use Presets")
+					.setValue(
+						this.plugin.settings?.themeMode ??
+							DEFAULT_SETTINGS.themeMode,
+					)
+					.onChange(async (value) => {
+						if (this.plugin.settings) {
+							this.plugin.settings.themeMode = value as ThemeMode;
+							await this.plugin.saveSettings();
+							// Refresh to show/hide preset dropdowns
+							this.display();
+						}
+					});
+			});
+
+		// Only show preset options when in preset mode
+		if (this.plugin.settings?.themeMode === "preset") {
+			const darkThemes = getDarkThemes();
+			const lightThemes = getLightThemes();
+
+			// Dark mode preset
+			const darkSetting = new Setting(containerEl)
+				.setName("Dark mode theme")
+				.setDesc("Theme used when Obsidian is in dark mode")
+				.addDropdown((dropdown) => {
+					darkThemes.forEach(({ id, theme }) => {
+						dropdown.addOption(id, theme.name);
+					});
+					dropdown
+						.setValue(
+							this.plugin.settings?.darkThemePreset ??
+								DEFAULT_SETTINGS.darkThemePreset,
+						)
+						.onChange(async (value) => {
+							if (this.plugin.settings) {
+								this.plugin.settings.darkThemePreset = value;
+								await this.plugin.saveSettings();
+								// this.renderThemePreview(
+								// 	darkSetting.settingEl,
+								// 	value,
+								// );
+							}
+						});
+				});
+			// this.renderThemePreview(
+			// 	darkSetting.settingEl,
+			// 	this.plugin.settings?.darkThemePreset ??
+			// 		DEFAULT_SETTINGS.darkThemePreset,
+			// );
+
+			// Light mode preset
+			const lightSetting = new Setting(containerEl)
+				.setName("Light mode theme")
+				.setDesc("Theme used when Obsidian is in light mode")
+				.addDropdown((dropdown) => {
+					lightThemes.forEach(({ id, theme }) => {
+						dropdown.addOption(id, theme.name);
+					});
+					dropdown
+						.setValue(
+							this.plugin.settings?.lightThemePreset ??
+								DEFAULT_SETTINGS.lightThemePreset,
+						)
+						.onChange(async (value) => {
+							if (this.plugin.settings) {
+								this.plugin.settings.lightThemePreset = value;
+								await this.plugin.saveSettings();
+								// this.renderThemePreview(
+								// 	lightSetting.settingEl,
+								// 	value,
+								// );
+							}
+						});
+				});
+			// this.renderThemePreview(
+			// 	lightSetting.settingEl,
+			// 	this.plugin.settings?.lightThemePreset ??
+			// 		DEFAULT_SETTINGS.lightThemePreset,
+			// );
+		}
+	}
+
+	/**
+	 * @deprecated Remove this method in the next major release.
+	 * Render theme color preview palette
+	 */
+	// private renderThemePreview(settingEl: HTMLElement, themeId: string): void {
+	// 	const theme = PRESET_THEMES[themeId];
+	// 	if (!theme) return;
+
+	// 	// Remove existing preview
+	// 	// const existing = settingEl.querySelector(".terminal-theme-preview");
+	// 	// if (existing) existing.remove();
+
+	// 	// // Create preview container
+	// 	// const preview = settingEl.createDiv({ cls: "terminal-theme-preview" });
+	// 	// Object.assign(preview.style, {
+	// 	// 	marginTop: "8px",
+	// 	// 	display: "flex",
+	// 	// 	gap: "4px",
+	// 	// 	flexWrap: "wrap",
+	// 	// });
+
+	// 	// Key colors to display
+	// 	const colors = [
+	// 		{ color: theme.background, title: "Background" },
+	// 		{ color: theme.foreground, title: "Foreground" },
+	// 		{ color: theme.cursor, title: "Cursor" },
+	// 		{ color: theme.red, title: "Red" },
+	// 		{ color: theme.green, title: "Green" },
+	// 		{ color: theme.yellow, title: "Yellow" },
+	// 		{ color: theme.blue, title: "Blue" },
+	// 		{ color: theme.magenta, title: "Magenta" },
+	// 		{ color: theme.cyan, title: "Cyan" },
+	// 	];
+
+	// 	colors.forEach(({ color, title }) => {
+	// 		const swatch = preview.createDiv();
+	// 		Object.assign(swatch.style, {
+	// 			width: "20px",
+	// 			height: "20px",
+	// 			borderRadius: "4px",
+	// 			backgroundColor: color,
+	// 			border: "1px solid var(--background-modifier-border)",
+	// 			cursor: "help",
+	// 		});
+	// 		swatch.setAttribute("title", `${title}: ${color}`);
+	// 	});
+	// }
 
 	/**
 	 * Display shell settings section
@@ -569,9 +739,9 @@ export class TerminalSettingsTab extends PluginSettingTab {
 					currentDropdownValue = value;
 
 					if (value === "custom") {
-						customShellContainer.style.display = "block";
+						customShellContainer.show();
 					} else {
-						customShellContainer.style.display = "none";
+						customShellContainer.hide();
 
 						if (this.plugin.settings) {
 							this.plugin.settings.defaultShell =
@@ -636,26 +806,30 @@ export class TerminalSettingsTab extends PluginSettingTab {
 	}
 
 	/**
-	 * Display experimental settings section
+	 * Display renderer settings section
 	 */
 	private displayExperimentalSection(containerEl: HTMLElement): void {
-		containerEl.createEl("h2", { text: "Experimental" });
+		containerEl.createEl("h2", { text: "Renderer" });
 
 		new Setting(containerEl)
-			.setName("Use Ghostty Renderer")
+			.setName("Terminal Renderer")
 			.setDesc(
-				"Use ghostty-web (WebAssembly) instead of xterm.js for terminal rendering. " +
-					"This is experimental and may have compatibility issues. Requires plugin reload.",
+				"Choose the terminal rendering engine. Xterm.js is the default and most stable. " +
+					"WebGL provides better performance. Ghostty is experimental.",
 			)
-			.addToggle((toggle) => {
-				toggle
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption("xterm", "Xterm.js (Canvas)")
+					.addOption("xterm-webgl", "Xterm.js (WebGL)")
+					.addOption("ghostty", "Ghostty (Experimental)")
 					.setValue(
-						this.plugin.settings?.useGhostty ??
-							DEFAULT_SETTINGS.useGhostty,
+						this.plugin.settings?.renderer ??
+							DEFAULT_SETTINGS.renderer,
 					)
 					.onChange(async (value) => {
 						if (this.plugin.settings) {
-							this.plugin.settings.useGhostty = value;
+							this.plugin.settings.renderer =
+								value as TerminalPluginSettings["renderer"];
 							await this.plugin.saveSettings();
 							new Notice(
 								"Please reload the plugin to apply this change.",
