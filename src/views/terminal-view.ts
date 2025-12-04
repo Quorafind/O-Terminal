@@ -1,6 +1,12 @@
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon as XTermFitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { ClipboardAddon } from "@xterm/addon-clipboard";
+import { ImageAddon } from "@xterm/addon-image";
+import { SearchAddon } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 import {
 	init as initGhostty,
 	Terminal as GhosttyTerminal,
@@ -138,6 +144,27 @@ ${xtermCss}
 .xterm-dom-renderer-owner-1 .xterm-screen .xterm-rows {
   color: var(--terminal-fg);
 }
+
+/*
+ * Ghostty IME textarea - invisible but functional for IME input
+ * Must remain in DOM for IME composition to work properly
+ */
+.ghostty-ime-textarea {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  z-index: -5;
+  overflow: hidden;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  pointer-events: none;
+}
 `;
 
 // Global store for shell sessions to persist across tab switches
@@ -166,6 +193,7 @@ export class TerminalView extends BaseTerminalView {
 	private shadowContainer: HTMLElement | null = null;
 	private fitAddon!: FitAddon;
 	private webLinksAddon?: WebLinksAddon;
+	private searchAddon?: SearchAddon;
 	private imeTextarea?: HTMLTextAreaElement;
 	private isComposing = false;
 	private disposables: Array<{ dispose(): void }> = [];
@@ -174,6 +202,8 @@ export class TerminalView extends BaseTerminalView {
 	private isRestarting = false;
 	private initializationState: "idle" | "initializing" | "ready" | "error" =
 		"idle";
+	private currentTitle = "";
+	private shellName = "";
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -190,7 +220,67 @@ export class TerminalView extends BaseTerminalView {
 	}
 
 	getDisplayText(): string {
-		return TERMINAL_VIEW_DISPLAY_TEXT;
+		let title = this.currentTitle.trim();
+
+		// Check if currentTitle is actually the shell executable path (not a useful cwd)
+		// PowerShell/cmd often set title to their own path, which is not useful
+		const isShellPath =
+			title &&
+			(title.toLowerCase().includes("powershell") ||
+				title.toLowerCase().includes("cmd.exe") ||
+				title.toLowerCase().includes("bash") ||
+				title.toLowerCase().includes("zsh") ||
+				title.toLowerCase().includes("sh.exe"));
+
+		// Priority: meaningful currentTitle > initialCwd > default
+		// If currentTitle is just the shell path, prefer initialCwd
+		if (!title || isShellPath) {
+			if (this.terminalSession?.initialCwd) {
+				title = this.terminalSession.initialCwd;
+			}
+		}
+
+		// Fallback to default
+		if (!title) {
+			title = TERMINAL_VIEW_DISPLAY_TEXT;
+		}
+
+		// Remove Windows "Administrator: " prefix
+		title = title.replace(/^Administrator:\s*/i, "");
+
+		// Remove terminal type suffix (e.g., "- xterm-256color", "xterm-256color")
+		title = title.replace(/\s*[-:]\s*xterm(-\d+color)?$/i, "");
+		title = title.replace(/\s+xterm(-\d+color)?$/i, "");
+
+		// If title looks like a path, extract just the directory name (basename)
+		const isPath =
+			/^[a-zA-Z]:[\\/]/.test(title) ||
+			title.startsWith("/") ||
+			title.includes("\\");
+
+		if (isPath) {
+			const parts = title
+				.split(/[\\/]/)
+				.filter((p) => p.trim().length > 0);
+			if (parts.length > 0) {
+				title = parts[parts.length - 1];
+			}
+		}
+
+		// Build shell suffix, ensuring it's not a terminal type
+		const shell =
+			this.shellName && !this.shellName.includes("xterm")
+				? `-${this.shellName}`
+				: "";
+
+		// Truncate long titles (max 20 chars)
+		const MAX_TITLE_LEN = 20;
+		let displayTitle = title;
+		if (displayTitle.length > MAX_TITLE_LEN) {
+			displayTitle = displayTitle.substring(0, MAX_TITLE_LEN) + "...";
+		}
+
+		return shell ? `${displayTitle}${shell}` : displayTitle;
 	}
 
 	getIcon(): string {
@@ -201,13 +291,6 @@ export class TerminalView extends BaseTerminalView {
 		try {
 			this.terminalViewContainer = this.contentEl.createDiv({
 				cls: "terminal-view-container",
-			});
-
-			// Apply container styles
-			Object.assign(this.terminalViewContainer.style, {
-				height: "100%",
-				width: "100%",
-				overflow: "hidden",
 			});
 
 			// Check for existing session
@@ -304,7 +387,14 @@ export class TerminalView extends BaseTerminalView {
 	 * Check if Ghostty renderer is enabled
 	 */
 	private get useGhostty(): boolean {
-		return this.plugin.settings?.useGhostty ?? false;
+		return this.plugin.settings?.renderer === "ghostty";
+	}
+
+	/**
+	 * Check if WebGL renderer is enabled
+	 */
+	private get useWebGL(): boolean {
+		return this.plugin.settings?.renderer === "xterm-webgl";
 	}
 
 	/**
@@ -328,6 +418,7 @@ export class TerminalView extends BaseTerminalView {
 			this.createTerminalInstance();
 			this.loadAddons();
 			this.openTerminalInShadow();
+			this.loadWebglAddon(); // Must be after open() for WebGL context
 			this.connectToPTY();
 			this.setupKeyboardHandlers();
 			this.setupContextMenu();
@@ -350,8 +441,14 @@ export class TerminalView extends BaseTerminalView {
 			});
 
 			this.initializationState = "ready";
-			const renderer = this.useGhostty ? "Ghostty" : "xterm.js";
-			console.log(`✅ Terminal initialization complete (${renderer})`);
+			const rendererName = this.useGhostty
+				? "Ghostty"
+				: this.useWebGL
+					? "xterm.js (WebGL)"
+					: "xterm.js";
+			console.log(
+				`✅ Terminal initialization complete (${rendererName})`,
+			);
 		} catch (error) {
 			this.initializationState = "error";
 			throw new TerminalPluginError(
@@ -387,28 +484,14 @@ export class TerminalView extends BaseTerminalView {
 		if (!this.shadowContainer) return;
 
 		// Create hidden textarea for IME input
-		this.imeTextarea = document.createElement("textarea");
-		this.imeTextarea.setAttribute("autocorrect", "off");
-		this.imeTextarea.setAttribute("autocapitalize", "off");
-		this.imeTextarea.setAttribute("spellcheck", "false");
-		this.imeTextarea.setAttribute("aria-label", "Terminal IME input");
-
-		// Style to be invisible but still functional for IME
-		Object.assign(this.imeTextarea.style, {
-			position: "absolute",
-			left: "0",
-			top: "0",
-			width: "0px",
-			height: "0px",
-			opacity: "0",
-			zIndex: "-5",
-			overflow: "hidden",
-			resize: "none",
-			border: "none",
-			outline: "none",
-			padding: "0",
-			margin: "0",
-			pointerEvents: "none",
+		this.imeTextarea = createEl("textarea", {
+			cls: "ghostty-ime-textarea",
+			attr: {
+				autocorrect: "off",
+				autocapitalize: "off",
+				spellcheck: "false",
+				"aria-label": "Terminal IME input",
+			},
 		});
 
 		this.shadowContainer.appendChild(this.imeTextarea);
@@ -689,13 +772,15 @@ export class TerminalView extends BaseTerminalView {
 	 * Create Shadow DOM for style isolation
 	 */
 	private createShadowDOM(): void {
+		// WebGL mode: render directly to DOM (Shadow DOM causes color issues)
+		if (this.useWebGL) {
+			this.createDirectDOM();
+			return;
+		}
+
 		// Create shadow host element
 		this.shadowHost = createEl("div", {
 			cls: "terminal-shadow-host",
-		});
-		Object.assign(this.shadowHost.style, {
-			height: "100%",
-			width: "100%",
 		});
 
 		// Attach shadow root
@@ -714,7 +799,28 @@ export class TerminalView extends BaseTerminalView {
 		// Append shadow host to view container
 		this.terminalViewContainer.appendChild(this.shadowHost);
 
+		// Initialize CSS variables with current theme colors
+		this.updateCSSVariables(this.plugin.themeColors);
+
 		console.log("✅ Shadow DOM created");
+	}
+
+	/**
+	 * Create direct DOM container for WebGL mode (no Shadow DOM)
+	 * WebGL renderer has compatibility issues with Shadow DOM
+	 */
+	private createDirectDOM(): void {
+		// Create container directly in the view
+		this.shadowContainer = this.terminalViewContainer.createDiv({
+			cls: "terminal-direct-container",
+		});
+
+		// Inject styles directly
+		const styleEl = document.createElement("style");
+		styleEl.textContent = shadowStyles;
+		this.terminalViewContainer.prepend(styleEl);
+
+		console.log("✅ Direct DOM created (WebGL mode)");
 	}
 
 	/**
@@ -726,9 +832,10 @@ export class TerminalView extends BaseTerminalView {
 		// 从插件设置读取配置，提供安全回退值
 		const settings = this.plugin.settings;
 		const fontSize = settings?.fontSize ?? DEFAULT_SETTINGS.fontSize;
-		const fontFamily = this.useGhostty
-			? "'Monaco', 'Menlo', 'Consolas', 'Courier New', monospace"
-			: (settings?.fontFamily ?? DEFAULT_SETTINGS.fontFamily);
+		const fontFamily =
+			this.useGhostty || this.useWebGL
+				? "'Monaco', 'Menlo', 'Consolas', 'Courier New', monospace"
+				: (settings?.fontFamily ?? DEFAULT_SETTINGS.fontFamily);
 		const cursorBlink =
 			settings?.cursorBlink ?? DEFAULT_SETTINGS.cursorBlink;
 		const scrollback = settings?.scrollback ?? DEFAULT_SETTINGS.scrollback;
@@ -736,6 +843,13 @@ export class TerminalView extends BaseTerminalView {
 		const terminalOptions = {
 			fontSize,
 			fontFamily,
+			// WebGL renderer often looks thinner than canvas, use heavier font weight
+			// xterm.js FontWeight accepts: "normal" | "bold" | "100" - "900"
+			fontWeight: (this.useWebGL ? "500" : "normal") as
+				| "normal"
+				| "bold"
+				| "500",
+			fontWeightBold: "bold" as const,
 			cursorBlink,
 			cursorStyle: "block" as const,
 			theme,
@@ -772,13 +886,85 @@ export class TerminalView extends BaseTerminalView {
 			this.terminal.loadAddon(this.fitAddon);
 			console.log("✅ Ghostty addons loaded");
 		} else {
-			// xterm.js addons
+			// xterm.js addons - load all available addons
 			this.fitAddon = new XTermFitAddon();
-			this.webLinksAddon = new WebLinksAddon();
 			this.terminal.loadAddon(this.fitAddon);
+
+			// Web links addon - clickable URLs
+			this.webLinksAddon = new WebLinksAddon();
 			this.terminal.loadAddon(this.webLinksAddon);
+
+			// Clipboard addon - enhanced clipboard support
+			this.terminal.loadAddon(new ClipboardAddon());
+
+			// Image addon - inline image support (iTerm2/Sixel)
+			this.terminal.loadAddon(new ImageAddon());
+
+			// Search addon - search functionality
+			this.searchAddon = new SearchAddon();
+			this.terminal.loadAddon(this.searchAddon);
+
+			// Serialize addon - buffer serialization
+			this.terminal.loadAddon(new SerializeAddon());
+
+			// Unicode11 addon - better unicode support
+			const unicode11Addon = new Unicode11Addon();
+			this.terminal.loadAddon(unicode11Addon);
+			(this.terminal as XTerminal).unicode.activeVersion = "11";
+
+			// Note: WebGL addon is loaded separately in loadWebglAddon()
+			// after terminal.open() because it requires DOM attachment
+
 			console.log("✅ xterm.js addons loaded");
 		}
+	}
+
+	/**
+	 * Load WebGL addon for hardware accelerated rendering
+	 * Must be called AFTER terminal.open() because WebGL requires DOM attachment
+	 */
+	private loadWebglAddon(): void {
+		if (!this.useWebGL || this.useGhostty) return;
+
+		// Use requestAnimationFrame to ensure DOM is fully rendered/measured
+		requestAnimationFrame(() => {
+			try {
+				// Check WebGL2 support first
+				const testCanvas = document.createElement("canvas");
+				const gl = testCanvas.getContext("webgl2");
+				if (!gl) {
+					console.warn(
+						"WebGL2 not supported, falling back to canvas renderer",
+					);
+					return;
+				}
+
+				const webglAddon = new WebglAddon();
+				webglAddon.onContextLoss(() => {
+					console.warn(
+						"WebGL context lost, falling back to canvas renderer",
+					);
+					webglAddon.dispose();
+				});
+				this.terminal.loadAddon(webglAddon);
+
+				// CRITICAL FIX: Re-apply theme to force WebGL renderer to pick up colors
+				// WebGL addon needs theme to be set AFTER it's loaded to properly initialize colors
+				const theme = this.plugin.themeColors;
+				if (theme) {
+					// Force a complete theme refresh by setting options.theme
+					(this.terminal as XTerminal).options.theme = { ...theme };
+					console.log("✅ WebGL theme applied:", theme);
+				}
+
+				console.log("✅ xterm.js WebGL addon loaded successfully");
+			} catch (error) {
+				console.warn(
+					"Failed to load WebGL addon, using canvas renderer:",
+					error,
+				);
+			}
+		});
 	}
 
 	/**
@@ -786,10 +972,11 @@ export class TerminalView extends BaseTerminalView {
 	 */
 	private openTerminalInShadow(): void {
 		if (!this.shadowContainer) {
-			throw new Error("Shadow container not initialized");
+			throw new Error("Terminal container not initialized");
 		}
 		this.terminal.open(this.shadowContainer);
-		console.log("✅ Terminal opened in Shadow DOM");
+		const mode = this.useWebGL ? "Direct DOM (WebGL)" : "Shadow DOM";
+		console.log(`✅ Terminal opened in ${mode}`);
 	}
 
 	/**
@@ -797,6 +984,17 @@ export class TerminalView extends BaseTerminalView {
 	 */
 	private connectToPTY(): void {
 		const { ptyProcess } = this.terminalSession;
+
+		// Extract shell name from session's shell path (not ptyProcess.process which is terminal type)
+		const shellPath = this.terminalSession.shell;
+		if (shellPath) {
+			const shellFileName = shellPath.split(/[\\/]/).pop() || "";
+			this.shellName = shellFileName.replace(/\.exe$/i, "");
+			console.log("🔍 Shell name extracted:", {
+				shellPath,
+				shellName: this.shellName,
+			});
+		}
 
 		// Handle user input - send to PTY
 		const dataDisposable = this.terminal.onData((data: string) => {
@@ -822,6 +1020,13 @@ export class TerminalView extends BaseTerminalView {
 			dispose: () => ptyProcess.removeListener("data", onDataHandler),
 		});
 
+		// Listen for terminal title changes (contains CWD from shell)
+		const titleDisposable = this.terminal.onTitleChange((title: string) => {
+			this.currentTitle = title;
+			this.updateTabTitle();
+		});
+		this.disposables.push(titleDisposable);
+
 		// Handle PTY exit
 		const onExitHandler = (exitCode: number) => {
 			this.handlePTYExit(exitCode);
@@ -837,6 +1042,43 @@ export class TerminalView extends BaseTerminalView {
 	}
 
 	/**
+	 * Update tab title with current directory and shell name
+	 */
+	private updateTabTitle(): void {
+		const leaf = this.leaf as any;
+		if (leaf.tabHeaderInnerTitleEl) {
+			leaf.tabHeaderInnerTitleEl.setText(this.getDisplayText());
+		}
+	}
+
+	/**
+	 * Update CSS variables in Shadow DOM host to match terminal theme
+	 * Uses CSS Custom Properties API for efficient runtime updates
+	 */
+	private updateCSSVariables(theme: Record<string, string>): void {
+		if (!this.shadowHost) return;
+
+		const { background, foreground, cursor, selectionBackground } = theme;
+
+		if (background) {
+			this.contentEl.style.setProperty("--terminal-bg", background);
+			this.shadowHost.style.setProperty("--terminal-bg", background);
+		}
+		if (foreground) {
+			this.shadowHost.style.setProperty("--terminal-fg", foreground);
+		}
+		if (cursor) {
+			this.shadowHost.style.setProperty("--terminal-cursor", cursor);
+		}
+		if (selectionBackground) {
+			this.shadowHost.style.setProperty(
+				"--terminal-selection",
+				selectionBackground,
+			);
+		}
+	}
+
+	/**
 	 * Update terminal theme colors
 	 * Called by plugin when Obsidian theme changes (css-change event)
 	 */
@@ -845,6 +1087,9 @@ export class TerminalView extends BaseTerminalView {
 			useGhostty: this.useGhostty,
 			hasTerminal: !!this.terminal,
 		});
+
+		// Sync CSS variables to Shadow DOM for container/viewport background
+		this.updateCSSVariables(theme);
 
 		if (!this.terminal) return;
 

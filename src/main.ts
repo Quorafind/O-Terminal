@@ -5,6 +5,7 @@ import {
 	Platform,
 	Menu,
 	debounce,
+	addIcon,
 } from "obsidian";
 import * as path from "path";
 import {
@@ -24,12 +25,16 @@ import {
 	TerminalSettingsTab,
 	DEFAULT_SETTINGS,
 	type TerminalPluginSettings,
+	type ThemeMode,
 } from "@/settings";
+import { PRESET_THEMES } from "@/core/themes";
 import {
 	PLUGIN_ID,
 	VIEW_TYPE_TERMINAL,
 	COMMAND_OPEN_TERMINAL,
 	COMMAND_OPEN_TERMINAL_NAME,
+	RIBBON_ICON_ID,
+	RIBBON_ICON_SVG,
 } from "@/constants";
 import "@/main.css";
 
@@ -92,6 +97,12 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 
 			// Register commands
 			this.registerCommands();
+
+			// Add Ribbon Icon for quick terminal access
+			addIcon(RIBBON_ICON_ID, RIBBON_ICON_SVG);
+			this.addRibbonIcon(RIBBON_ICON_ID, "New Terminal", () => {
+				this.openTerminal(true);
+			});
 
 			// Initialize theme colors (must be after DOM is ready)
 			this.themeColors = this.resolveThemeColors();
@@ -378,12 +389,12 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 			this.debounceResizeAllViews(150);
 		});
 
-		// Handle theme/CSS changes
-		// this.registerEvent(
-		// 	this.app.workspace.on("css-change", () => {
-		// 		this.debounceUpdateAllViews();
-		// 	}),
-		// );
+		// Handle theme/CSS changes (including dark/light mode switches)
+		this.registerEvent(
+			this.app.workspace.on("css-change", () => {
+				this.debounceUpdateAllViews();
+			}),
+		);
 
 		// Intercept "New Tab" button clicks to show menu (Desktop only)
 		if (Platform.isDesktop) {
@@ -599,6 +610,16 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 	async loadSettings(): Promise<void> {
 		const data = await this.loadData();
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+
+		// Migration: useGhostty -> renderer
+		if (data && "useGhostty" in data && this.settings) {
+			if ((data as any).useGhostty === true) {
+				this.settings.renderer = "ghostty";
+			}
+			delete (this.settings as any).useGhostty;
+			// Save migrated settings
+			await this.saveData(this.settings);
+		}
 	}
 
 	/**
@@ -614,14 +635,71 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 	}
 
 	/**
-	 * Resolve CSS variables to actual color values for xterm.js
-	 * xterm.js theme does not support CSS variables, so we must resolve them at runtime
+	 * Resolve terminal theme colors
+	 *
+	 * Supports two modes:
+	 * - "system": Resolves colors from Obsidian CSS variables
+	 * - "preset": Uses predefined terminal color schemes
+	 *
+	 * WebGL renderer requires HEX colors, so all colors are converted to HEX format.
 	 */
 	private resolveThemeColors(): Record<string, string> {
+		const themeMode: ThemeMode =
+			this.settings?.themeMode ?? DEFAULT_SETTINGS.themeMode;
+
+		// Preset mode: use predefined theme
+		if (themeMode === "preset") {
+			const isDark = document.body.classList.contains("theme-dark");
+			const presetId = isDark
+				? (this.settings?.darkThemePreset ??
+					DEFAULT_SETTINGS.darkThemePreset)
+				: (this.settings?.lightThemePreset ??
+					DEFAULT_SETTINGS.lightThemePreset);
+
+			const theme = PRESET_THEMES[presetId];
+			if (theme) {
+				// Return a copy of the theme (excluding metadata)
+				const { name, type, ...colors } = theme;
+				return { ...colors };
+			}
+			// Fall through to system mode if preset not found
+		}
+
+		// System mode: resolve from Obsidian CSS variables
 		const styles = getComputedStyle(document.body);
+
+		/**
+		 * Convert any CSS color to HEX format
+		 * WebGL renderer requires HEX colors for proper rendering
+		 */
+		const toHex = (color: string): string => {
+			// If already HEX, return as-is
+			if (color.startsWith("#")) {
+				return color;
+			}
+
+			// Use canvas to convert any CSS color to RGB
+			const canvas = document.createElement("canvas");
+			canvas.width = canvas.height = 1;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return color;
+
+			ctx.fillStyle = color;
+			ctx.fillRect(0, 0, 1, 1);
+			const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+
+			// If has transparency, return rgba format (for selectionBackground)
+			if (a < 255) {
+				return `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(2)})`;
+			}
+
+			// Convert to HEX
+			return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+		};
+
 		const resolve = (cssVar: string, fallback: string): string => {
 			const value = styles.getPropertyValue(cssVar).trim();
-			return value || fallback;
+			return toHex(value || fallback);
 		};
 
 		return {

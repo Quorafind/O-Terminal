@@ -48,6 +48,8 @@ export class TerminalManager extends BaseTerminalManager {
 				ptyProcess,
 				isActive: true,
 				view: undefined, // Will be set when view is created
+				initialCwd: ptyOptions.cwd,
+				shell: ptyOptions.shell,
 			};
 
 			// Store the session
@@ -346,6 +348,8 @@ export class TerminalManager extends BaseTerminalManager {
 						ptyProcess,
 						isActive: true,
 						view: undefined,
+						initialCwd: ptyOptions.cwd,
+						shell: ptyOptions.shell,
 					};
 
 					// Store the session

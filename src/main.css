@@ -1,14 +1,27 @@
 .mod-root .workspace-leaf-content[data-type="terminal-view"] .view-content {
-	background-color: var(--background-secondary);
+	background-color: var(--terminal-bg);
 }
 
 .workspace-leaf-content[data-type="terminal-view"] {
 	--font-monospace-terminal:
-		"Source Code Pro", "Cascadia Code", Consolas, "Cascadia Mono", Menlo,
-		Monaco, "Courier New", "Apple Color Emoji", "Segoe UI Emoji",
-		"Segoe UI Symbol", "Noto Color Emoji", monospace;
+		"Monaco", "Menlo", "Consolas", "Courier New", monospace,
+		"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+		"Noto Color Emoji";
 }
 
 .workspace-leaf-content[data-type="terminal-view"] .view-header {
 	display: none;
+}
+
+/* Terminal view container - fills the view content area */
+.terminal-view-container {
+	height: 100%;
+	width: 100%;
+	overflow: hidden;
+}
+
+/* Shadow host - container for Shadow DOM terminal */
+.terminal-shadow-host {
+	height: 100%;
+	width: 100%;
 }

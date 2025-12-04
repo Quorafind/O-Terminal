@@ -35,6 +35,10 @@ export interface TerminalSession {
 	ptyProcess: IPty;
 	view?: TerminalView;
 	isActive: boolean;
+	/** Initial working directory when the session was created */
+	initialCwd?: string;
+	/** Shell path used to create the session */
+	shell?: string;
 }
 
 /**
