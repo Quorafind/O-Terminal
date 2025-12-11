@@ -197,6 +197,12 @@ export class ElectronBridge extends BaseElectronBridge {
 
 	/**
 	 * Check if installer version needs update
+	 *
+	 * Only shows warning if the current Electron version doesn't match
+	 * the version that native modules were compiled for. Version mismatch
+	 * between installer and Obsidian internal version is acceptable as long
+	 * as the Electron version matches the plugin's target.
+	 *
 	 * @returns Object with needsUpdate flag and reason
 	 */
 	checkInstallerVersion(): {
@@ -218,17 +224,40 @@ export class ElectronBridge extends BaseElectronBridge {
 			};
 		}
 
-		// Compare versions
+		// Import the target Electron version from embedded-modules
+		// This is the version native modules were compiled for
+		const { MODULE_INFO } = require("./embedded-modules");
+		const targetElectronVersion = MODULE_INFO.electronVersion;
+		const currentElectronVersion = this.getElectronVersion();
+
+		// If current Electron version matches target, no update needed
+		// regardless of installer vs Obsidian version mismatch
+		if (currentElectronVersion && targetElectronVersion) {
+			const electronComparison = this.compareVersions(
+				currentElectronVersion,
+				targetElectronVersion,
+			);
+			if (electronComparison === 0) {
+				// Electron versions match - native modules will work
+				return {
+					needsUpdate: false,
+					reason: null,
+					obsidianVersion,
+					installerVersion,
+				};
+			}
+		}
+
+		// Only warn if installer is significantly older AND Electron version doesn't match
 		const comparison = this.compareVersions(
 			installerVersion,
 			obsidianVersion,
 		);
 
-		// Installer version is older than Obsidian version
 		if (comparison < 0) {
 			return {
 				needsUpdate: true,
-				reason: `Installer version (${installerVersion}) is older than Obsidian version (${obsidianVersion}). Please reinstall Obsidian to update the installer.`,
+				reason: `Installer version (${installerVersion}) is older than Obsidian version (${obsidianVersion}). Current Electron (${currentElectronVersion}) differs from target (${targetElectronVersion}). Please reinstall Obsidian to update the installer.`,
 				obsidianVersion,
 				installerVersion,
 			};

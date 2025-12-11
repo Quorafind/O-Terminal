@@ -178,8 +178,19 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 		container.createEl("br");
 		container.createEl("br");
 
-		// Check if installer needs update
+		// Check if installer needs update by comparing Electron versions
+		// Only show warning if current Electron doesn't match the target version
+		const { MODULE_INFO } = require("@/core/embedded-modules");
+		const targetElectronVersion = MODULE_INFO.electronVersion;
+		const currentElectronVersion = process.versions?.electron || "unknown";
+		const electronMismatch =
+			currentElectronVersion !== "unknown" &&
+			targetElectronVersion &&
+			currentElectronVersion !== targetElectronVersion;
+
+		// Only warn about installer if Electron version doesn't match target
 		const needsInstallerUpdate =
+			electronMismatch &&
 			installerVersion !== "unknown" &&
 			obsidianVersion !== "unknown" &&
 			installerVersion < obsidianVersion;
@@ -195,7 +206,7 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 			});
 			container.createEl("br");
 			container.createEl("span", {
-				text: "This causes Electron version mismatch. Please reinstall Obsidian from obsidian.md",
+				text: `Current Electron (${currentElectronVersion}) differs from target (${targetElectronVersion}). Please reinstall Obsidian.`,
 			});
 			container.createEl("br");
 			container.createEl("br");
@@ -247,8 +258,6 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 		const container = notice.messageEl;
 		container.empty();
 		container.addClass("terminal-native-notice");
-		container.style.backgroundColor = "#ff9800";
-		container.style.color = "#000";
 
 		container.createEl("strong", {
 			text: "⚠️ Obsidian Installer Update Required",
@@ -419,9 +428,15 @@ export default class TerminalPlugin extends Plugin implements ITerminalPlugin {
 		console.log("=".repeat(50));
 		console.log("📋 Terminal Plugin - Version Information");
 		console.log("=".repeat(50));
-		console.log(`🔷 Electron version: ${versionInfo.electron || "unknown"}`);
-		console.log(`🔷 Obsidian version: ${versionInfo.obsidian || "unknown"}`);
-		console.log(`🔷 Installer version: ${versionInfo.installer || "unknown"}`);
+		console.log(
+			`🔷 Electron version: ${versionInfo.electron || "unknown"}`,
+		);
+		console.log(
+			`🔷 Obsidian version: ${versionInfo.obsidian || "unknown"}`,
+		);
+		console.log(
+			`🔷 Installer version: ${versionInfo.installer || "unknown"}`,
+		);
 		console.log(`🔷 Node.js version: ${versionInfo.node || "unknown"}`);
 		console.log(`🔷 Chrome version: ${versionInfo.chrome || "unknown"}`);
 		console.log(`🔷 Platform: ${versionInfo.platform}`);
