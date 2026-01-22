@@ -850,7 +850,7 @@ export class NativeBinaryManager {
 	 * Get current configuration
 	 */
 	static getConfig() {
-		return { ...CURRENT_CONFIG };
+		return getCurrentConfig();
 	}
 
 	/**
