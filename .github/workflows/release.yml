@@ -142,7 +142,7 @@ jobs:
 
             - name: List built binaries (Windows)
               if: matrix.platform == 'win32'
-              shell: pwsh
+              shell: powershell
               run: Get-ChildItem -Path node_modules/node-pty/build/Release/ -ErrorAction SilentlyContinue
 
             - name: List built binaries (Unix)
@@ -153,7 +153,7 @@ jobs:
             # Prepare complete node-pty structure for upload (Windows)
             - name: Prepare node-pty bundle (Windows)
               if: matrix.platform == 'win32'
-              shell: pwsh
+              shell: powershell
               run: |
                   New-Item -ItemType Directory -Force -Path bundle/node-pty/build/Release
                   New-Item -ItemType Directory -Force -Path bundle/node-pty/lib
