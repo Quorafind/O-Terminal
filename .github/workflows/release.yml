@@ -23,6 +23,7 @@ jobs:
     # ===========================================
     build-native:
         strategy:
+            fail-fast: false
             matrix:
                 include:
                     # ===== ABI 140 (Electron 39.x, Obsidian 1.11.x) =====
@@ -103,6 +104,10 @@ jobs:
             - name: Install dependencies (Unix)
               if: matrix.platform != 'win32'
               run: pnpm install --frozen-lockfile
+
+            # Update node-abi to support latest Electron versions
+            - name: Update node-abi for Electron compatibility
+              run: pnpm add -D node-abi@latest
 
             # Windows: Download headers, fix source files, then rebuild
             - name: Download Electron headers (Windows)
