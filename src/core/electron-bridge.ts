@@ -12,6 +12,7 @@ import {
 	TerminalPluginError,
 	TerminalErrorType,
 } from "@/types";
+import { MODULE_INFO } from "./embedded-modules";
 
 /**
  * Electron bridge implementation using @electron/remote for PTY loading
@@ -399,12 +400,40 @@ export class ElectronBridge extends BaseElectronBridge {
 	}
 
 	/**
+	 * Check if native module ABI is compatible with current Electron
+	 * MUST be called before loading node-pty to prevent crashes
+	 */
+	checkABICompatibility(): { compatible: boolean; message?: string } {
+		const currentABI = parseInt(process.versions.modules, 10);
+		const expectedABI = MODULE_INFO.nodeABI;
+
+		if (currentABI !== expectedABI) {
+			return {
+				compatible: false,
+				message:
+					`Native module ABI mismatch: compiled for NODE_MODULE_VERSION ${expectedABI}, ` +
+					`but current Electron requires ${currentABI}. ` +
+					`Please download updated native modules from plugin settings or GitHub Release.`,
+			};
+		}
+		return { compatible: true };
+	}
+
+	/**
 	 * Initialize node-pty loading via @electron/remote
 	 * This loads node-pty in Electron's main process
 	 */
 	private async initializeNodePty(): Promise<void> {
 		if (this._initialized) {
 			return;
+		}
+
+		const compatibility = this.checkABICompatibility();
+		if (!compatibility.compatible) {
+			throw new TerminalPluginError(
+				TerminalErrorType.NODE_PTY_NOT_AVAILABLE,
+				compatibility.message!,
+			);
 		}
 
 		console.log("🚀 Initializing node-pty via @electron/remote...");

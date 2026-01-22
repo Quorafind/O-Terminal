@@ -41,3 +41,12 @@ export const GHOSTTY_OPTIONS = {
 	fontSize: 14,
 	fontFamily: "'Monaco', 'Menlo', 'Consolas', 'Courier New', monospace",
 } as const;
+
+/**
+ * Obsidian version to Electron version mapping
+ * Used for native module compatibility checks
+ */
+export const OBSIDIAN_ELECTRON_VERSIONS = {
+	"1.10.x": { electron: "37.10.2", nodeABI: 136 },
+	"1.11.x": { electron: "39.2.6", nodeABI: 140 },
+} as const;
