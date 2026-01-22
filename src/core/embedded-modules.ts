@@ -11,8 +11,8 @@
  * Module metadata and configuration
  */
 export const MODULE_INFO = {
-	electronVersion: "37.10.2",
-	nodeABI: 136,
+	electronVersion: "39.2.6",
+	nodeABI: 140,
 	supportedPlatforms: [
 		"win32_x64",
 		"darwin_x64",

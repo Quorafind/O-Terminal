@@ -10,8 +10,8 @@
 # 4. Switch back to original Node.js version
 
 param(
-    [string]$ElectronVersion = "37.10.2",  # Obsidian's Electron version
-    [string]$TargetABI = "136",            # NODE_MODULE_VERSION 136 = Node.js 24.x
+    [string]$ElectronVersion = "39.2.6",  # Obsidian's Electron version
+    [string]$TargetABI = "140",            # NODE_MODULE_VERSION 136 = Node.js 24.x
     [switch]$SkipRestore                   # Don't restore original Node.js version after build
 )
 

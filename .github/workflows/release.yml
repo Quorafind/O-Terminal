@@ -15,8 +15,8 @@ permissions:
     actions: write
 
 env:
-    ELECTRON_VERSION: "37.10.2"
-    NODE_ABI: "136"
+    ELECTRON_VERSION: "39.2.6"
+    NODE_ABI: "140"
     PLUGIN_NAME: "obsidian-terminal"
 
 jobs:

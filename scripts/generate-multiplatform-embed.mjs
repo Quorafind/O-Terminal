@@ -20,7 +20,13 @@
  *       pty.node
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "fs";
+import {
+	readFileSync,
+	writeFileSync,
+	existsSync,
+	readdirSync,
+	statSync,
+} from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { createHash } from "crypto";
@@ -31,8 +37,8 @@ const ROOT_DIR = join(__dirname, "..");
 
 // Configuration
 const CONFIG = {
-	electronVersion: "37.10.2",
-	nodeABI: 136,
+	electronVersion: "39.2.6",
+	nodeABI: 140,
 };
 
 // Expected binaries per platform
@@ -58,11 +64,15 @@ function sha256(buffer) {
  */
 function generateMultiplatformEmbed() {
 	console.log("🔄 Generating multi-platform embedded modules...");
-	console.log(`📦 Target: Electron ${CONFIG.electronVersion} (ABI ${CONFIG.nodeABI})`);
+	console.log(
+		`📦 Target: Electron ${CONFIG.electronVersion} (ABI ${CONFIG.nodeABI})`,
+	);
 	console.log("");
 
 	if (!existsSync(NATIVE_BINARIES_DIR)) {
-		console.error(`❌ Native binaries directory not found: ${NATIVE_BINARIES_DIR}`);
+		console.error(
+			`❌ Native binaries directory not found: ${NATIVE_BINARIES_DIR}`,
+		);
 		process.exit(1);
 	}
 
@@ -73,7 +83,7 @@ function generateMultiplatformEmbed() {
 
 	// Process each platform directory
 	const platformDirs = readdirSync(NATIVE_BINARIES_DIR).filter((dir) =>
-		statSync(join(NATIVE_BINARIES_DIR, dir)).isDirectory()
+		statSync(join(NATIVE_BINARIES_DIR, dir)).isDirectory(),
 	);
 
 	console.log(`📂 Found platforms: ${platformDirs.join(", ")}`);
@@ -93,7 +103,11 @@ function generateMultiplatformEmbed() {
 
 		for (const fileName of actualFiles) {
 			// Only process expected file types
-			if (!fileName.endsWith(".node") && !fileName.endsWith(".dll") && !fileName.endsWith(".exe")) {
+			if (
+				!fileName.endsWith(".node") &&
+				!fileName.endsWith(".dll") &&
+				!fileName.endsWith(".exe")
+			) {
 				continue;
 			}
 
@@ -103,7 +117,9 @@ function generateMultiplatformEmbed() {
 			const hash = sha256(buffer);
 
 			// Use filename without extension as key for .node files
-			const key = fileName.endsWith(".node") ? fileName.replace(".node", "") : fileName;
+			const key = fileName.endsWith(".node")
+				? fileName.replace(".node", "")
+				: fileName;
 
 			platformModules[key] = base64;
 			platformFiles.push({
