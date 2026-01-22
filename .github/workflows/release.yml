@@ -115,12 +115,7 @@ jobs:
               if: matrix.platform != 'win32'
               run: pnpm add -D node-abi@latest && cd node_modules/node-pty && npm install nan@latest --save
 
-            # Windows: Download headers, fix source files, then rebuild
-            - name: Download Electron headers (Windows)
-              if: matrix.platform == 'win32'
-              run: npx @electron/rebuild -m node_modules/node-pty -v ${{ matrix.electron-version }} --force
-              continue-on-error: true
-
+            # Windows: Fix source files BEFORE any rebuild attempt
             - name: Fix source files (Windows)
               if: matrix.platform == 'win32'
               run: |
@@ -128,6 +123,7 @@ jobs:
                   node scripts/fix-winpty-cc.mjs
                   node scripts/fix-conpty-cc.mjs
 
+            # Windows: Now rebuild with fixed source files
             - name: Rebuild node-pty for Electron (Windows)
               if: matrix.platform == 'win32'
               run: npx @electron/rebuild -m node_modules/node-pty -v ${{ matrix.electron-version }} --force

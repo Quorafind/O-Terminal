@@ -93,6 +93,7 @@ function fixWinptyCc() {
 	const insertPoint = firstBrace + 1;
 
 	// Variables that need to be declared early (with default values)
+	// Added more variables for nan@latest compatibility
 	const earlyDeclarations = `
   // Variables declared early to avoid goto-skip issues (MSVC fix)
   int cols = 80;
@@ -105,6 +106,8 @@ function fixWinptyCc() {
   HANDLE handle = nullptr;
   BOOL spawnSuccess = FALSE;
   v8::Local<v8::Object> marshal;
+  std::wstring inName, outName;
+  DWORD winptyOpenMode = PIPE_ACCESS_INBOUND | PIPE_ACCESS_OUTBOUND;
 `;
 
 	// Now remove the original declarations and replace with assignments
