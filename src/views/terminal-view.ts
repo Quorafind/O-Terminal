@@ -172,24 +172,42 @@ ${xtermCss}
 }
 
 /*
- * Ghostty IME textarea - invisible but functional for IME input
- * Must remain in DOM for IME composition to work properly
+ * Ghostty IME textarea - positioned at cursor for IME candidate window
+ * Uses minimal visibility to allow IME engines to position candidate window correctly
+ * while remaining invisible to user
  */
 .ghostty-ime-textarea {
   position: absolute;
+  /* Position will be dynamically set by updateGhosttyImePosition() */
   left: 0;
   top: 0;
-  width: 0;
-  height: 0;
-  opacity: 0;
-  z-index: -5;
+  /* Minimal size but not zero - some IME engines need non-zero size */
+  width: 1px;
+  height: 1em;
+  /* Use clip instead of opacity:0 for better IME compatibility */
+  opacity: 0.01;
+  /* Ensure it's above terminal content for IME positioning */
+  z-index: 1000;
   overflow: hidden;
   resize: none;
   border: none;
   outline: none;
   padding: 0;
   margin: 0;
+  /* Allow pointer events only when focused (for IME click positioning) */
   pointer-events: none;
+  /* Match terminal font for accurate cursor positioning */
+  font-size: inherit;
+  font-family: inherit;
+  line-height: 1;
+  /* Transparent background */
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+}
+
+.ghostty-ime-textarea:focus {
+  pointer-events: auto;
 }
 
 /*
@@ -642,24 +660,15 @@ export class TerminalView extends BaseTerminalView {
 
 		this.shadowContainer.appendChild(this.imeTextarea);
 
-		// Composition start - user begins IME input
 		const onCompositionStart = () => {
 			this.isComposing = true;
 		};
 
-		// Composition end - user confirms IME input
-		const onCompositionEnd = (e: CompositionEvent) => {
+		const onCompositionEnd = (_e: CompositionEvent) => {
 			this.isComposing = false;
-			const text = e.data;
-			if (text && this.terminalSession.ptyProcess) {
-				this.terminalSession.ptyProcess.write(text);
-			}
-			// Clear textarea for next input
 			if (this.imeTextarea) {
 				this.imeTextarea.value = "";
 			}
-			// In Ghostty mode, keep focus on IME textarea for keyboard handling
-			// (Ghostty's native keyboard handling doesn't work well in Electron)
 		};
 
 		// Handle keydown in IME textarea - forward non-IME keys to terminal
@@ -836,15 +845,17 @@ export class TerminalView extends BaseTerminalView {
 		};
 
 		// Handle input events (backup for any input that bypasses keydown)
-		const onInput = (e: Event) => {
-			if (this.isComposing) return; // Skip during composition
-			const target = e.target as HTMLTextAreaElement;
-			const text = target.value;
-			if (text && this.terminalSession.ptyProcess) {
-				this.terminalSession.ptyProcess.write(text);
-			}
-			target.value = "";
-		};
+		// DISABLED: ghostty-web 0.4.0+ has native IME handling, this causes duplicate input
+		// const onInput = (e: Event) => {
+		// 	// Skip during composition or right after composition ended (prevents duplicate)
+		// 	if (this.isComposing || justFinishedComposition) return;
+		// 	const target = e.target as HTMLTextAreaElement;
+		// 	const text = target.value;
+		// 	if (text && this.terminalSession.ptyProcess) {
+		// 		this.terminalSession.ptyProcess.write(text);
+		// 	}
+		// 	target.value = "";
+		// };
 
 		this.imeTextarea.addEventListener(
 			"compositionstart",
@@ -852,10 +863,7 @@ export class TerminalView extends BaseTerminalView {
 		);
 		this.imeTextarea.addEventListener("compositionend", onCompositionEnd);
 		this.imeTextarea.addEventListener("keydown", onTextareaKeyDown);
-		this.imeTextarea.addEventListener("input", onInput);
 
-		// --- IME Position Tracking ---
-		// Update IME textarea position to follow cursor for proper candidate window placement
 		const updateImePosition = () => this.updateGhosttyImePosition();
 
 		// Update on user interaction (keyup captures position after key processing)
@@ -886,7 +894,6 @@ export class TerminalView extends BaseTerminalView {
 					"keydown",
 					onTextareaKeyDown,
 				);
-				this.imeTextarea?.removeEventListener("input", onInput);
 				this.imeTextarea?.removeEventListener(
 					"keyup",
 					updateImePosition,
