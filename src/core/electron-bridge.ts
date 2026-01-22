@@ -12,7 +12,12 @@ import {
 	TerminalPluginError,
 	TerminalErrorType,
 } from "@/types";
-import { MODULE_INFO } from "./embedded-modules";
+import {
+	getCurrentNodeABI,
+	isABISupported,
+	SUPPORTED_ABIS,
+	getNativeModulesSuffix,
+} from "./embedded-modules";
 
 /**
  * Electron bridge implementation using @electron/remote for PTY loading
@@ -225,40 +230,29 @@ export class ElectronBridge extends BaseElectronBridge {
 			};
 		}
 
-		// Import the target Electron version from embedded-modules
-		// This is the version native modules were compiled for
-		const { MODULE_INFO } = require("./embedded-modules");
-		const targetElectronVersion = MODULE_INFO.electronVersion;
-		const currentElectronVersion = this.getElectronVersion();
-
-		// If current Electron version matches target, no update needed
-		// regardless of installer vs Obsidian version mismatch
-		if (currentElectronVersion && targetElectronVersion) {
-			const electronComparison = this.compareVersions(
-				currentElectronVersion,
-				targetElectronVersion,
-			);
-			if (electronComparison === 0) {
-				// Electron versions match - native modules will work
-				return {
-					needsUpdate: false,
-					reason: null,
-					obsidianVersion,
-					installerVersion,
-				};
-			}
+		// Check if current ABI is supported by this plugin
+		const currentABI = getCurrentNodeABI();
+		if (isABISupported(currentABI)) {
+			// Current ABI is supported - native modules will work
+			return {
+				needsUpdate: false,
+				reason: null,
+				obsidianVersion,
+				installerVersion,
+			};
 		}
 
-		// Only warn if installer is significantly older AND Electron version doesn't match
+		// Only warn if installer is significantly older AND ABI is not supported
 		const comparison = this.compareVersions(
 			installerVersion,
 			obsidianVersion,
 		);
 
 		if (comparison < 0) {
+			const supportedList = Object.keys(SUPPORTED_ABIS).join(", ");
 			return {
 				needsUpdate: true,
-				reason: `Installer version (${installerVersion}) is older than Obsidian version (${obsidianVersion}). Current Electron (${currentElectronVersion}) differs from target (${targetElectronVersion}). Please reinstall Obsidian to update the installer.`,
+				reason: `Installer version (${installerVersion}) is older than Obsidian version (${obsidianVersion}). Current ABI (${currentABI}) is not supported. Supported ABIs: ${supportedList}. Please reinstall Obsidian to update the installer.`,
 				obsidianVersion,
 				installerVersion,
 			};
@@ -401,22 +395,42 @@ export class ElectronBridge extends BaseElectronBridge {
 
 	/**
 	 * Check if native module ABI is compatible with current Electron
+	 * Now supports multiple ABI versions (136 for Obsidian 1.10.x, 140 for 1.11.x)
 	 * MUST be called before loading node-pty to prevent crashes
 	 */
-	checkABICompatibility(): { compatible: boolean; message?: string } {
-		const currentABI = parseInt(process.versions.modules, 10);
-		const expectedABI = MODULE_INFO.nodeABI;
+	checkABICompatibility(): {
+		compatible: boolean;
+		currentABI: number;
+		message?: string;
+	} {
+		const currentABI = getCurrentNodeABI();
 
-		if (currentABI !== expectedABI) {
+		if (!isABISupported(currentABI)) {
+			const supportedList = Object.entries(SUPPORTED_ABIS)
+				.map(
+					([abi, info]) =>
+						`ABI ${abi} (Obsidian ${info.obsidianVersion})`,
+				)
+				.join(", ");
+
 			return {
 				compatible: false,
+				currentABI,
 				message:
-					`Native module ABI mismatch: compiled for NODE_MODULE_VERSION ${expectedABI}, ` +
-					`but current Electron requires ${currentABI}. ` +
-					`Please download updated native modules from plugin settings or GitHub Release.`,
+					`Unsupported Node ABI version: ${currentABI}. ` +
+					`This plugin supports: ${supportedList}. ` +
+					`Please check if your Obsidian version is compatible.`,
 			};
 		}
-		return { compatible: true };
+		return { compatible: true, currentABI };
+	}
+
+	/**
+	 * Get the native modules suffix for downloading the correct zip
+	 * e.g., "win32_x64-abi140" or "darwin_arm64-abi136"
+	 */
+	getNativeModulesSuffix(): string {
+		return getNativeModulesSuffix();
 	}
 
 	/**
