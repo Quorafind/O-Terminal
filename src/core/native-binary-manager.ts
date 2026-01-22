@@ -25,6 +25,10 @@ import {
 	MODULE_INFO,
 	PLATFORM_BINARIES,
 	isPlatformSupported,
+	getCurrentNodeABI,
+	isABISupported,
+	SUPPORTED_ABIS,
+	type SupportedABI,
 } from "./embedded-modules";
 
 /**
@@ -81,14 +85,21 @@ export interface ReleaseInfo {
 }
 
 /**
- * Current configuration
+ * Get current configuration based on runtime ABI
  */
-const CURRENT_CONFIG = {
-	electronVersion: MODULE_INFO.electronVersion,
-	nodeABI: MODULE_INFO.nodeABI,
-	// Default GitHub repository (can be overridden in settings)
-	defaultGitHubRepo: "quorafind/obsidian-terminal",
-};
+function getCurrentConfig() {
+	const currentABI = getCurrentNodeABI();
+	const abiInfo = isABISupported(currentABI)
+		? SUPPORTED_ABIS[currentABI as SupportedABI]
+		: null;
+
+	return {
+		electronVersion: abiInfo?.electronVersion ?? "unknown",
+		nodeABI: currentABI,
+		// Default GitHub repository (can be overridden in settings)
+		defaultGitHubRepo: "quorafind/obsidian-terminal",
+	};
+}
 
 /**
  * Native Binary Manager
@@ -193,11 +204,29 @@ export class NativeBinaryManager {
 
 	/**
 	 * Fetch the latest release info from GitHub
+	 * Automatically selects the correct ABI version based on current Electron
 	 */
 	async fetchLatestRelease(repo: string): Promise<ReleaseInfo> {
 		const apiUrl = `https://api.github.com/repos/${repo}/releases/latest`;
+		const currentABI = getCurrentNodeABI();
 
 		console.log(`🔍 Fetching latest release from ${repo}...`);
+		console.log(
+			`🔍 Current Node ABI: ${currentABI}, Platform: ${this.platformKey}`,
+		);
+
+		// Check if current ABI is supported
+		if (!isABISupported(currentABI)) {
+			const supportedList = Object.entries(SUPPORTED_ABIS)
+				.map(
+					([abi, info]) =>
+						`ABI ${abi} (Obsidian ${info.obsidianVersion})`,
+				)
+				.join(", ");
+			throw new Error(
+				`Unsupported Node ABI: ${currentABI}. Supported: ${supportedList}`,
+			);
+		}
 
 		const response = await requestUrl({
 			url: apiUrl,
@@ -235,18 +264,35 @@ export class NativeBinaryManager {
 		const release = response.json;
 		const version = release.tag_name.replace(/^v/, "");
 
-		// Find the native bundle asset for the current platform
-		// Naming format: obsidian-terminal-v1.0.0-native-win32_x64.zip
-		const assetName = `obsidian-terminal-v${version}-native-${this.platformKey}.zip`;
+		// Find the native bundle asset for the current platform AND ABI
+		// Naming format: obsidian-terminal-v1.0.0-native-win32_x64-abi140.zip
+		const assetName = `obsidian-terminal-v${version}-native-${this.platformKey}-abi${currentABI}.zip`;
 		const bundleAsset = release.assets?.find(
 			(a: { name: string }) => a.name === assetName,
 		);
 
 		if (!bundleAsset) {
+			// Try to find any available ABI for this platform and suggest alternatives
+			const availableAssets = release.assets
+				?.filter((a: { name: string }) =>
+					a.name.includes(`native-${this.platformKey}-abi`),
+				)
+				.map((a: { name: string }) => a.name);
+
+			if (availableAssets && availableAssets.length > 0) {
+				throw new Error(
+					`No native modules for your Electron version (ABI ${currentABI}). ` +
+						`Available: ${availableAssets.join(", ")}. ` +
+						`You may need to update Obsidian or download manually.`,
+				);
+			}
+
 			throw new Error(
-				`Release does not contain native module bundle for your platform (${assetName})`,
+				`Release does not contain native module bundle for your platform (${this.platformKey}, ABI ${currentABI})`,
 			);
 		}
+
+		console.log(`✅ Found matching asset: ${assetName}`);
 
 		return {
 			version,
@@ -265,7 +311,7 @@ export class NativeBinaryManager {
 	): Promise<void> {
 		onProgress?.({
 			phase: "checking",
-			message: "检查最新版本...",
+			message: "Checking latest version...",
 		});
 
 		try {
@@ -275,21 +321,22 @@ export class NativeBinaryManager {
 					MODULE_INFO.supportedPlatforms as readonly string[]
 				).join(", ");
 				throw new Error(
-					`平台 ${this.platformKey} 不支持。支持的平台: ${supported}`,
+					`Platform ${this.platformKey} is not supported. Supported: ${supported}`,
 				);
 			}
 
-			// Fetch release info
+			// Fetch release info (will check ABI compatibility)
 			const releaseInfo = await this.fetchLatestRelease(repo);
+			const config = getCurrentConfig();
 
 			console.log(`📦 Latest release: v${releaseInfo.version}`);
 			console.log(
-				`📦 Required Electron: ${MODULE_INFO.electronVersion}, ABI: ${MODULE_INFO.nodeABI}`,
+				`📦 Current Electron: ${config.electronVersion}, ABI: ${config.nodeABI}`,
 			);
 
 			onProgress?.({
 				phase: "downloading",
-				message: `下载原生模块包 v${releaseInfo.version}...`,
+				message: `Downloading native modules v${releaseInfo.version}...`,
 				percent: 0,
 			});
 
@@ -301,12 +348,14 @@ export class NativeBinaryManager {
 			});
 
 			if (bundleResponse.status !== 200) {
-				throw new Error(`下载失败: HTTP ${bundleResponse.status}`);
+				throw new Error(
+					`Download failed: HTTP ${bundleResponse.status}`,
+				);
 			}
 
 			onProgress?.({
 				phase: "extracting",
-				message: "解压原生模块...",
+				message: "Extracting native modules...",
 				percent: 50,
 			});
 
@@ -358,26 +407,26 @@ export class NativeBinaryManager {
 			}
 
 			if (missingFiles.length > 0) {
-				throw new Error(`缺少文件: ${missingFiles.join(", ")}`);
+				throw new Error(`Missing files: ${missingFiles.join(", ")}`);
 			}
 
-			// Write manifest
+			// Write manifest with current ABI info
 			this.writeManifest(
 				releaseInfo.version,
-				MODULE_INFO.electronVersion,
-				MODULE_INFO.nodeABI,
+				config.electronVersion,
+				config.nodeABI,
 				extractedFiles,
 			);
 
 			onProgress?.({
 				phase: "complete",
-				message: `安装完成 (v${releaseInfo.version})`,
+				message: `Installation complete (v${releaseInfo.version})`,
 				percent: 100,
 			});
 		} catch (error) {
 			onProgress?.({
 				phase: "error",
-				message: `安装失败: ${(error as Error).message}`,
+				message: `Installation failed: ${(error as Error).message}`,
 				error: error as Error,
 			});
 			throw error;
@@ -550,11 +599,12 @@ export class NativeBinaryManager {
 			);
 		}
 
-		// Write manifest with extracted version
+		// Write manifest with extracted version and current ABI
+		const config = getCurrentConfig();
 		this.writeManifest(
 			version,
-			MODULE_INFO.electronVersion,
-			MODULE_INFO.nodeABI,
+			config.electronVersion,
+			config.nodeABI,
 			extractedFiles,
 		);
 
