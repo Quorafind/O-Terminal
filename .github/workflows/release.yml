@@ -107,7 +107,17 @@ jobs:
 
             # Update node-abi to support latest Electron versions
             # Update nan for V8 14.x compatibility (Electron 39+)
-            - name: Update native build dependencies
+            - name: Update native build dependencies (Windows)
+              if: matrix.platform == 'win32'
+              shell: pwsh
+              run: |
+                  pnpm add -D node-abi@latest
+                  Set-Location node_modules/node-pty
+                  npm install nan@latest --save
+
+            - name: Update native build dependencies (Unix)
+              if: matrix.platform != 'win32'
+              shell: bash
               run: |
                   pnpm add -D node-abi@latest
                   cd node_modules/node-pty && npm install nan@latest --save
