@@ -24,7 +24,11 @@ import {
 	type BinaryStatus,
 	type ProgressCallback,
 } from "@/core/native-binary-manager";
-import { MODULE_INFO } from "@/core/embedded-modules";
+import {
+	MODULE_INFO,
+	getCurrentNodeABI,
+	SUPPORTED_ABIS,
+} from "@/core/embedded-modules";
 import { GHOSTTY_OPTIONS } from "@/constants";
 import { getDarkThemes, getLightThemes } from "@/core/themes";
 
