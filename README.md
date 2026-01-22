@@ -194,7 +194,7 @@ Please follow [Conventional Commits](https://www.conventionalcommits.org/) for c
 
 ## License
 
-Distributed under the **MIT License**. See [LICENSE](LICENSE) for more information.
+Distributed under the **Apache 2.0 License**. See [LICENSE](LICENSE) for more information.
 
 ## 🙏 Acknowledgements
 
