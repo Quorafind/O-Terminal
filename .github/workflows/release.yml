@@ -93,7 +93,7 @@ jobs:
               uses: actions/setup-node@v4
               with:
                   node-version: ${{ matrix.node-version }}
-                  cache: "pnpm"
+                  # Disable cache for self-hosted runners (causes timeout issues)
 
             # Windows: Install without running postinstall scripts to avoid premature node-pty build
             - name: Install dependencies (Windows)
