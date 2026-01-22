@@ -15,37 +15,69 @@ permissions:
     actions: write
 
 env:
-    ELECTRON_VERSION: "39.2.6"
-    NODE_ABI: "140"
     PLUGIN_NAME: "obsidian-terminal"
 
 jobs:
     # ===========================================
-    # Build native modules for each platform
+    # Build native modules for each platform x ABI combination
     # ===========================================
     build-native:
         strategy:
             matrix:
                 include:
+                    # ===== ABI 140 (Electron 39.x, Obsidian 1.11.x) =====
                     - os: [self-hosted, Windows, X64]
                       platform: win32
                       arch: x64
                       node-version: "24"
+                      electron-version: "39.2.6"
+                      node-abi: "140"
                     - os: macos-15-intel
                       platform: darwin
                       arch: x64
                       node-version: "24"
+                      electron-version: "39.2.6"
+                      node-abi: "140"
                     - os: [self-hosted, macOS, ARM64]
                       platform: darwin
                       arch: arm64
                       node-version: "24"
+                      electron-version: "39.2.6"
+                      node-abi: "140"
                     - os: ubuntu-latest
                       platform: linux
                       arch: x64
                       node-version: "24"
+                      electron-version: "39.2.6"
+                      node-abi: "140"
+                    # ===== ABI 136 (Electron 37.x, Obsidian 1.10.x) =====
+                    - os: [self-hosted, Windows, X64]
+                      platform: win32
+                      arch: x64
+                      node-version: "24"
+                      electron-version: "37.10.2"
+                      node-abi: "136"
+                    - os: macos-15-intel
+                      platform: darwin
+                      arch: x64
+                      node-version: "24"
+                      electron-version: "37.10.2"
+                      node-abi: "136"
+                    - os: [self-hosted, macOS, ARM64]
+                      platform: darwin
+                      arch: arm64
+                      node-version: "24"
+                      electron-version: "37.10.2"
+                      node-abi: "136"
+                    - os: ubuntu-latest
+                      platform: linux
+                      arch: x64
+                      node-version: "24"
+                      electron-version: "37.10.2"
+                      node-abi: "136"
 
         runs-on: ${{ matrix.os }}
-        name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+        name: Build ${{ matrix.platform }}-${{ matrix.arch }} (ABI ${{ matrix.node-abi }})
 
         steps:
             - name: Checkout
@@ -75,34 +107,61 @@ jobs:
             # Windows: Download headers, fix source files, then rebuild
             - name: Download Electron headers (Windows)
               if: matrix.platform == 'win32'
-              run: npx @electron/rebuild -m node_modules/node-pty -v ${{ env.ELECTRON_VERSION }} --force
+              run: npx @electron/rebuild -m node_modules/node-pty -v ${{ matrix.electron-version }} --force
               continue-on-error: true
 
             - name: Fix source files (Windows)
               if: matrix.platform == 'win32'
               run: |
-                  node scripts/fix-electron-headers.mjs ${{ env.ELECTRON_VERSION }}
+                  node scripts/fix-electron-headers.mjs ${{ matrix.electron-version }}
                   node scripts/fix-winpty-cc.mjs
                   node scripts/fix-conpty-cc.mjs
 
             - name: Rebuild node-pty for Electron (Windows)
               if: matrix.platform == 'win32'
-              run: npx @electron/rebuild -m node_modules/node-pty -v ${{ env.ELECTRON_VERSION }} --force
+              run: npx @electron/rebuild -m node_modules/node-pty -v ${{ matrix.electron-version }} --force
 
             # Unix: Just rebuild directly (no header fixes needed)
             - name: Rebuild node-pty for Electron (Unix)
               if: matrix.platform != 'win32'
-              run: npx @electron/rebuild -m node_modules/node-pty -v ${{ env.ELECTRON_VERSION }}
+              run: npx @electron/rebuild -m node_modules/node-pty -v ${{ matrix.electron-version }}
 
             - name: Copy binaries
               run: node scripts/copy-node-pty-binaries.mjs
 
-            - name: List built binaries
+            - name: List built binaries (Windows)
+              if: matrix.platform == 'win32'
+              shell: pwsh
+              run: Get-ChildItem -Path node_modules/node-pty/build/Release/ -ErrorAction SilentlyContinue
+
+            - name: List built binaries (Unix)
+              if: matrix.platform != 'win32'
               shell: bash
               run: ls -la node_modules/node-pty/build/Release/ || true
 
-            # Prepare complete node-pty structure for upload
-            - name: Prepare node-pty bundle
+            # Prepare complete node-pty structure for upload (Windows)
+            - name: Prepare node-pty bundle (Windows)
+              if: matrix.platform == 'win32'
+              shell: pwsh
+              run: |
+                  New-Item -ItemType Directory -Force -Path bundle/node-pty/build/Release
+                  New-Item -ItemType Directory -Force -Path bundle/node-pty/lib
+
+                  # Copy package.json
+                  Copy-Item node_modules/node-pty/package.json bundle/node-pty/
+
+                  # Copy JS files (lib directory)
+                  Copy-Item -Recurse node_modules/node-pty/lib/* bundle/node-pty/lib/
+
+                  # Copy native binaries (.node files)
+                  Copy-Item node_modules/node-pty/build/Release/*.node bundle/node-pty/build/Release/
+
+                  Write-Host "=== Bundle structure ==="
+                  Get-ChildItem -Recurse bundle | Select-Object -First 20
+
+            # Prepare complete node-pty structure for upload (Unix)
+            - name: Prepare node-pty bundle (Unix)
+              if: matrix.platform != 'win32'
               shell: bash
               run: |
                   mkdir -p bundle/node-pty/build/Release
@@ -118,8 +177,6 @@ jobs:
                   cp node_modules/node-pty/build/Release/*.node bundle/node-pty/build/Release/
 
                   # Copy spawn-helper executable (required for macOS)
-                  # spawn-helper is a standalone executable without extension that node-pty
-                  # uses on macOS to spawn processes with proper PTY handling
                   if [ -f "node_modules/node-pty/build/Release/spawn-helper" ]; then
                     cp node_modules/node-pty/build/Release/spawn-helper bundle/node-pty/build/Release/
                     chmod +x bundle/node-pty/build/Release/spawn-helper
@@ -129,11 +186,11 @@ jobs:
                   echo "=== Bundle structure ==="
                   find bundle -type f | head -20
 
-            # Upload complete node-pty structure
+            # Upload complete node-pty structure with ABI in artifact name
             - name: Upload native binaries
               uses: actions/upload-artifact@v4
               with:
-                  name: native-${{ matrix.platform }}_${{ matrix.arch }}
+                  name: native-${{ matrix.platform }}_${{ matrix.arch }}-abi${{ matrix.node-abi }}
                   path: bundle/node-pty
                   retention-days: 1
 
@@ -163,35 +220,60 @@ jobs:
             - name: Install dependencies
               run: pnpm install --frozen-lockfile
 
-            # Download all native artifacts (complete node-pty structure)
-            - name: Download Windows x64 binaries
+            # Download all native artifacts for ABI 140 (Obsidian 1.11.x)
+            - name: Download Windows x64 binaries (ABI 140)
               uses: actions/download-artifact@v4
               with:
-                  name: native-win32_x64
-                  path: native-bundle/win32_x64/node-pty
+                  name: native-win32_x64-abi140
+                  path: native-bundle/abi140/win32_x64/node-pty
 
-            - name: Download macOS x64 binaries
+            - name: Download macOS x64 binaries (ABI 140)
               uses: actions/download-artifact@v4
               with:
-                  name: native-darwin_x64
-                  path: native-bundle/darwin_x64/node-pty
+                  name: native-darwin_x64-abi140
+                  path: native-bundle/abi140/darwin_x64/node-pty
 
-            - name: Download macOS arm64 binaries
+            - name: Download macOS arm64 binaries (ABI 140)
               uses: actions/download-artifact@v4
               with:
-                  name: native-darwin_arm64
-                  path: native-bundle/darwin_arm64/node-pty
+                  name: native-darwin_arm64-abi140
+                  path: native-bundle/abi140/darwin_arm64/node-pty
 
-            - name: Download Linux x64 binaries
+            - name: Download Linux x64 binaries (ABI 140)
               uses: actions/download-artifact@v4
               with:
-                  name: native-linux_x64
-                  path: native-bundle/linux_x64/node-pty
+                  name: native-linux_x64-abi140
+                  path: native-bundle/abi140/linux_x64/node-pty
+
+            # Download all native artifacts for ABI 136 (Obsidian 1.10.x)
+            - name: Download Windows x64 binaries (ABI 136)
+              uses: actions/download-artifact@v4
+              with:
+                  name: native-win32_x64-abi136
+                  path: native-bundle/abi136/win32_x64/node-pty
+
+            - name: Download macOS x64 binaries (ABI 136)
+              uses: actions/download-artifact@v4
+              with:
+                  name: native-darwin_x64-abi136
+                  path: native-bundle/abi136/darwin_x64/node-pty
+
+            - name: Download macOS arm64 binaries (ABI 136)
+              uses: actions/download-artifact@v4
+              with:
+                  name: native-darwin_arm64-abi136
+                  path: native-bundle/abi136/darwin_arm64/node-pty
+
+            - name: Download Linux x64 binaries (ABI 136)
+              uses: actions/download-artifact@v4
+              with:
+                  name: native-linux_x64-abi136
+                  path: native-bundle/abi136/linux_x64/node-pty
 
             - name: List all downloaded files
               run: |
                   echo "=== Native bundle structure ==="
-                  find native-bundle -type f | head -50
+                  find native-bundle -type f | head -100
 
             # Build plugin
             - name: Build plugin
@@ -212,21 +294,25 @@ jobs:
                   echo "version=$VERSION" >> $GITHUB_OUTPUT
                   echo "Version: $VERSION"
 
-            # Create separate ZIPs for each platform
+            # Create separate ZIPs for each platform x ABI combination
             - name: Create platform-specific ZIPs
               run: |
                   mkdir -p release-assets
 
-                  for platform_dir in native-bundle/*; do
-                    platform_name=$(basename "$platform_dir")
-                    zip_name="${{ env.PLUGIN_NAME }}-v${{ steps.version.outputs.version }}-native-${platform_name}.zip"
+                  # Create ZIPs for each ABI version
+                  for abi_dir in native-bundle/*; do
+                    abi_name=$(basename "$abi_dir")  # e.g., abi140, abi136
 
-                    echo "📦 Packaging $platform_name into $zip_name..."
+                    for platform_dir in "$abi_dir"/*; do
+                      platform_name=$(basename "$platform_dir")  # e.g., win32_x64
+                      zip_name="${{ env.PLUGIN_NAME }}-v${{ steps.version.outputs.version }}-native-${platform_name}-${abi_name}.zip"
 
-                    # Go into the platform directory so "node-pty" is at the root of the zip
-                    cd "$platform_dir"
-                    zip -r "../../release-assets/$zip_name" node-pty
-                    cd - > /dev/null
+                      echo "📦 Packaging $platform_name ($abi_name) into $zip_name..."
+
+                      cd "$platform_dir"
+                      zip -r "../../../release-assets/$zip_name" node-pty
+                      cd - > /dev/null
+                    done
                   done
 
                   echo "=== Generated Assets ==="
@@ -279,7 +365,11 @@ jobs:
               uses: geekyeggo/delete-artifact@v4
               with:
                   name: |
-                      native-win32_x64
-                      native-darwin_x64
-                      native-darwin_arm64
-                      native-linux_x64
+                      native-win32_x64-abi140
+                      native-darwin_x64-abi140
+                      native-darwin_arm64-abi140
+                      native-linux_x64-abi140
+                      native-win32_x64-abi136
+                      native-darwin_x64-abi136
+                      native-darwin_arm64-abi136
+                      native-linux_x64-abi136
