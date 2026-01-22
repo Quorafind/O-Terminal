@@ -36,8 +36,8 @@ importers:
         specifier: ^5.5.0
         version: 5.5.0
       ghostty-web:
-        specifier: 0.3.0
-        version: 0.3.0
+        specifier: 0.4.0-next.7.g03ead6e
+        version: 0.4.0-next.7.g03ead6e
       node-pty:
         specifier: ^1.0.0
         version: 1.0.0
@@ -1255,8 +1255,8 @@ packages:
     resolution: {integrity: sha512-b1O07XYq8eRuVzBNgJLstU6FYc1tS6wnMtF1I1D9lE8LxZSOGZ7LhxN54yPP6mGw5f2CkXY2BQUL9Fx41qvcIg==}
     engines: {node: '>= 14'}
 
-  ghostty-web@0.3.0:
-    resolution: {integrity: sha512-SAdSHWYF20GMZUB0n8kh1N6Z4ljMnuUqT8iTB2n5FAPswEV10MejEpLlhW/769GL5+BQa1NYwEg9y/XCckV5+A==}
+  ghostty-web@0.4.0-next.7.g03ead6e:
+    resolution: {integrity: sha512-858/fXcbD5y3rEH/UwRTTAXnssrwV393nBqkXObVOJyoiXOka49QtzuVi/hHsqe24l7YxVOXWCwmHMD2CCsWhA==}
 
   git-raw-commits@5.0.0:
     resolution: {integrity: sha512-I2ZXrXeOc0KrCvC7swqtIFXFN+rbjnC7b2T943tvemIOVNl+XP8YnA9UVwqFhzzLClnSA60KR/qEjLpXzs73Qg==}
@@ -3610,7 +3610,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  ghostty-web@0.3.0: {}
+  ghostty-web@0.4.0-next.7.g03ead6e: {}
 
   git-raw-commits@5.0.0(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.2.1):
     dependencies:
