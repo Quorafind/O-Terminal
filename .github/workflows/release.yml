@@ -106,8 +106,11 @@ jobs:
               run: pnpm install --frozen-lockfile
 
             # Update node-abi to support latest Electron versions
-            - name: Update node-abi for Electron compatibility
-              run: pnpm add -D node-abi@latest
+            # Update nan for V8 14.x compatibility (Electron 39+)
+            - name: Update native build dependencies
+              run: |
+                  pnpm add -D node-abi@latest
+                  cd node_modules/node-pty && npm install nan@latest --save
 
             # Windows: Download headers, fix source files, then rebuild
             - name: Download Electron headers (Windows)
